@@ -1,0 +1,19 @@
+{
+  "name": "waline-worker",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Waline comment server on Cloudflare Workers with D1",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "d1:init": "wrangler d1 execute waline-db --file=node_modules/@waline/cloudflare/assets/schema.sql"
+  },
+  "dependencies": {
+    "@waline/cloudflare": "^1.0.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20240000.0",
+    "wrangler": "^3.0.0"
+  }
+}

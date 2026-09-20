@@ -53,10 +53,43 @@ jobs:
           git commit -m "deploy: $GITHUB_SHA" -q
           git push -f "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" HEAD:gh-pages -q
 
-  # ---- 2. 部署 blog-worker 到 Cloudflare ----
+  # ---- 2. 部署 Waline 评论服务到 Cloudflare Workers ----
+  deploy-waline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install waline-worker deps
+        working-directory: waline-worker
+        run: npm install
+
+      - name: Deploy waline-worker to Cloudflare
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CF_API_TOKEN }}
+          accountId: ${{ secrets.CF_ACCOUNT_ID }}
+          workingDirectory: waline-worker
+          command: deploy
+
+      - name: Initialize D1 database schema
+        working-directory: waline-worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+        run: |
+          npx wrangler d1 execute waline-db \
+            --file=node_modules/@waline/cloudflare/assets/schema.sql \
+            2>&1 || echo "Schema init may have already run (tables already exist), continuing..."
+
+  # ---- 3. 部署 blog-worker 到 Cloudflare ----
   deploy-worker:
     runs-on: ubuntu-latest
-    needs: build-blog
+    needs: [build-blog, deploy-waline]
     env:
       GH_TOKEN: ${{ secrets.GH_TOKEN }}
     steps:
