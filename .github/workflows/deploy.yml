@@ -76,7 +76,10 @@ jobs:
 
       - name: Install deps
         working-directory: waline-worker
-        run: pnpm install --frozen-lockfile
+        run: |
+          # 批准 pnpm build scripts（CI 环境）
+          echo 'approvedBuiltDependencies=["esbuild","sharp","workerd","@biomejs/cli-linux-x64","@cloudflare/workerd-linux-64","@img/sharp-libvips-linux-x64","@img/sharp-libvips-linuxmusl-x64","@rolldown/binding-linux-x64-gnu"]' > .npmrc
+          pnpm install --frozen-lockfile
 
       - name: Generate wrangler.toml
         working-directory: waline-worker
