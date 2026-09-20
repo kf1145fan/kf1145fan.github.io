@@ -1,0 +1,35 @@
+name: Deploy blog-worker to Cloudflare
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "blog-worker/**"
+
+jobs:
+  deploy-worker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        working-directory: blog-worker
+        run: npm install
+
+      - name: Deploy to Cloudflare Workers
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CF_API_TOKEN }}
+          accountId: ${{ secrets.CF_ACCOUNT_ID }}
+          workingDirectory: blog-worker
+          command: deploy
+          secrets: |
+            GH_TOKEN
+          env: |
+            CF_API_TOKEN
+            CF_ACCOUNT_ID

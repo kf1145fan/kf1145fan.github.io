@@ -1,0 +1,80 @@
+name: Deploy Blog
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  # ---- 1. 构建 Hexo 并部署到 GitHub Pages（gh-pages 分支）----
+  build-blog:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Hexo deps
+        run: npm install
+
+      - name: Generate site
+        run: npx hexo generate
+
+      - name: Enable Pages (from gh-pages branch)
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          REPO="kf1145fan/kf1145fan.github.io"
+          gh api -X POST repos/${REPO}/pages \
+            -f "source[branch]=gh-pages" -f "source[path]=/" 2>/dev/null \
+            || gh api -X PUT repos/${REPO}/pages \
+               -f "source[branch]=gh-pages" -f "source[path]=/" 2>/dev/null \
+            || echo "pages enable maybe already done (api may need manual)"
+
+      - name: Deploy to gh-pages
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          REPO: "kf1145fan/kf1145fan.github.io"
+        run: |
+          cd public || exit 1
+          git init -q
+          git config user.name "deployer"
+          git config user.email "deployer@users.noreply.github.com"
+          git add -A
+          git commit -m "deploy: $GITHUB_SHA" -q
+          git push -f "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" HEAD:gh-pages -q
+
+  # ---- 2. 部署 blog-worker 到 Cloudflare ----
+  deploy-worker:
+    runs-on: ubuntu-latest
+    needs: build-blog
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install worker deps
+        working-directory: blog-worker
+        run: npm install
+
+      - name: Deploy worker to Cloudflare
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CF_API_TOKEN }}
+          accountId: ${{ secrets.CF_ACCOUNT_ID }}
+          workingDirectory: blog-worker
+          command: deploy
+          secrets: |
+            GH_TOKEN

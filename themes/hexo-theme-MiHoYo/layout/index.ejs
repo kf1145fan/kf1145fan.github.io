@@ -1,0 +1,25 @@
+<link rel="stylesheet" href="/css/index.css">
+<div class="paginator">
+  <div class="content">
+    <div class="contain-box1">
+
+      <div class="hd logodiv">
+        <%- image_tag(theme.gender,{class: 'logopng' , alt: 'logo' , src: theme.img_src}) %>
+          <p class="logot">
+            <%= theme.logo_title %>
+              <span class="logo_2"></span>
+              <h3 class="words" style="font-weight: bold;font-family: Georgia;">
+                <%= theme.words %>
+              </h3>
+              <p>一言: </p><p id="hitokoto_123">一言加载中...</p>
+              <script>(function(){var pElement=document.getElementById('hitokoto_123');let pressTimer;function fetchHitokoto(){fetch('https://yy.802213.xyz/api/').then(response=>response.text()).then(data=>{pElement.textContent=data;}).catch(error=>{pElement.textContent='长风破浪会有时，直挂云帆济沧海。';});}fetchHitokoto();pElement.addEventListener('click',function(){pElement.textContent='加载中...';fetchHitokoto();});pElement.addEventListener('mousedown',function(){pressTimer=window.setTimeout(function(){window.location.href='1.php';},500);});pElement.addEventListener('mouseup',function(){clearTimeout(pressTimer);});pElement.addEventListener('mouseleave',function(){clearTimeout(pressTimer);});pElement.addEventListener('touchstart',function(){pressTimer=window.setTimeout(function(){window.location.href='1.php';},500);});pElement.addEventListener('touchend',function(){clearTimeout(pressTimer);});})();</script>
+          </p>
+      </div>
+      <%- partial('./common/nav') %>
+
+    </div>
+    <div class="contain-box2">
+      <%- partial('./common/index-post') %>
+    </div>
+  </div>
+</div>

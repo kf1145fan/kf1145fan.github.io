@@ -1,0 +1,17 @@
+<% if (theme.waline.enable && theme.waline.serverURL){ %>
+    <!-- Waline Comments -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@waline/client@v3/dist/waline.css" />
+    <div id="wl-comment" class="comments"></div>
+    <script type="module">
+        import { init } from 'https://cdn.jsdelivr.net/npm/@waline/client@v3/dist/waline.js';
+        init({
+            el: '#wl-comment',
+            serverURL: <%- JSON.stringify(theme.waline.serverURL) %>,
+            lang: 'zh-CN',
+            dark: 'html.theme-dark',
+            path: location.pathname.replace(/index\.html$/, ''),
+            pageview: <%- (typeof theme.waline.pageview === 'string' ? theme.waline.pageview === 'true' : !!theme.waline.pageview) %>
+        });
+    </script>
+    <!-- Waline Comments end -->
+<% } %>

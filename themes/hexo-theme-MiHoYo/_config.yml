@@ -1,0 +1,53 @@
+﻿# html lang
+language: en
+
+menuname: Fanchuanhaha's blog
+
+# 你的昵称 | Your Name
+author: Fanchuanhaha
+
+# main menu navigation
+menu:
+  关于我👀: /about
+  访问主站🎃: http://t.802213.xyz/   (不能用)
+  GitHub🧨: https://github.com/fanchuanhaha
+
+topmenu:
+  首页: /
+  关于: /about
+
+## 网站描述
+description: null
+
+## 网站关键词：用英文逗号分割
+keywords: Fanchuanhaha,帆船haha,kf1145fan,hexo,theme,MiHoYo
+
+## blog头像
+img_src: http://q1.qlogo.cn/g?b=qq&nk=3098393078&s=100
+
+# 网站标题 | Title
+logo_title: Fanchuanhaha's Blog
+
+#标语 | Your Slogan
+words: 欢迎来到我的博客
+
+# 滑动顶部框
+# topmenu:
+#  首页  index: /
+#  关于  about: /about
+
+# stylesheets loaded in the <head>
+stylesheets:
+  - /css/MiHoYo.css
+
+# scripts loaded in the end of the body
+scripts:
+  - /js/MiHoYo.js
+
+# 评论系统 | Comments
+## 做了域名限制，请改成自己的 KEY
+## 若关闭valine 设置enable为false
+valine:
+  enable: false
+  appId:
+  appKey:

@@ -1,0 +1,310 @@
+/* ============================================================
+   Dark Mode
+   触发条件：html.theme-dark
+   切换脚本：theme.js -> toggleDark()
+   持久化：localStorage('indigo-theme') = 'dark' | 'light'
+   系统偏好：prefers-color-scheme: dark 时自动启用（仅在用户未手动设置时）
+   ============================================================ */
+
+/* ---------- 暗色模式专用变量 ---------- */
+@dark-bg:        #121212;     // 主体背景
+@dark-surface:   #1e1e1e;     // 卡片/菜单/搜索面板
+@dark-surface-2: #252525;     // 略亮一层：代码块、引用
+@dark-border:    #2c2c2c;     // 分割线/边框
+@dark-text:      #e0e0e0;     // 主文本
+@dark-text-soft: #b0b0b0;     // 次级文本
+@dark-text-mute: #777;        // 三级文本 / 提示
+@dark-primary:   #7986cb;     // 主色（亮一档，匹配暗色背景）
+@dark-accent:    #ff80ab;     // 强调色
+@dark-link:      #9fa8da;     // 链接
+
+/* ---------- 基础 ---------- */
+html.theme-dark {
+    background-color: @dark-bg;
+    color: @dark-text;
+
+    ::selection {
+        background: fade(@dark-primary, 30%);
+    }
+
+    ::-webkit-scrollbar-thumb {
+        background-color: #444;
+        border-color: @dark-bg;
+    }
+
+    hr, .hr { border-top-color: @dark-border; }
+
+    a {
+        color: @dark-link;
+        &:hover { color: lighten(@dark-link, 10%); }
+    }
+
+    /* ---------- 顶部 ---------- */
+    .top-header {
+        background: darken(@dark-primary, 15%);
+    }
+
+    .content-header {
+        background: darken(@dark-primary, 15%);
+        .subtitle { color: darken(#fff, 5%); }
+    }
+
+    /* ---------- 侧边栏 ---------- */
+    #menu {
+        background: @dark-surface;
+        box-shadow: 0 2px 5px 0 rgba(0, 0, 0, .6), 0 2px 10px 0 rgba(0, 0, 0, .5);
+
+        .brand {
+            background: fade(@dark-primary, 35%);
+        }
+
+        .introduce { color: #fff; }
+        .mail { color: darken(#fff, 10%); }
+
+        .nav li {
+            &:hover,
+            &.active {
+                background: rgba(255, 255, 255, .06);
+                a, .icon { color: @dark-primary; }
+            }
+            a { color: @dark-text-soft; }
+        }
+    }
+
+    /* ---------- 卡片 ---------- */
+    .post-card,
+    .article-card,
+    .page-article .card,
+    .page-content > blockquote,
+    .page-content > pre,
+    .page-content > figure,
+    .page-modal {
+        background: @dark-surface;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, .6);
+        color: @dark-text;
+    }
+
+    .post-card-title,
+    .post-title-link { color: @dark-link; }
+
+    .post-meta,
+    .post-toc h4,
+    .post-toc-item,
+    .article-tag-list .tags span,
+    .search-result .tags span,
+    .search-result .time,
+    .post-nav-link .tips,
+    .post-content em,
+    .post-content .image-caption,
+    .archive-separator,
+    .page-content .timeline .item > h6 { color: @dark-text-soft; }
+
+    .post-content {
+        color: @dark-text;
+
+        h1, h2, h3, h4, h5, h6 { color: @dark-primary; }
+        .headerlink { color: @dark-text-mute; }
+
+        a { color: @dark-accent; }
+
+        strong { color: @dark-primary; }
+
+        blockquote {
+            background: @dark-surface-2;
+            color: @dark-text-soft;
+            border-left-color: @dark-primary;
+        }
+
+        code,
+        pre { background: @dark-surface-2; color: @dark-text; }
+
+        p code, li code {
+            color: @dark-accent;
+            background: @dark-surface-2;
+            border-color: @dark-border;
+        }
+
+        table {
+            border-color: @dark-border;
+            thead tr { background: @dark-surface-2; }
+            tbody tr:hover { background: rgba(255, 255, 255, .04); }
+            td, th { border-color: @dark-border; }
+        }
+    }
+
+    /* ---------- 文章目录 ---------- */
+    .post-toc-item.active > .post-toc-link {
+        color: @dark-primary;
+        &:before { background: rgba(255, 255, 255, .06); }
+        &:after { border-left-color: @dark-primary; }
+    }
+
+    /* ---------- 文章分页 ---------- */
+    .post-nav {
+        .prev, .next { background: @dark-surface-2; }
+    }
+
+    /* ---------- 文章版权 ---------- */
+    .post-copyright {
+        .content, footer a {
+            background: @dark-surface-2;
+            color: @dark-text-soft;
+        }
+    }
+
+    /* ---------- 分割线 ---------- */
+    .post-footer { border-top-color: @dark-border; }
+
+    /* ---------- 文章列表 ---------- */
+    .post-more:hover,
+    .post-more:active {
+        background: rgba(255, 255, 255, .08);
+    }
+
+    #page-nav {
+        a, span { color: @dark-text-soft; }
+        a:hover, a:active {
+            color: @dark-primary;
+            background: @dark-surface-2;
+        }
+        .current { background: @dark-primary; color: #fff; }
+    }
+
+    /* ---------- 归档页 ---------- */
+    .archive-article {
+        border-bottom-color: @dark-border !important;
+    }
+
+    /* ---------- 标签 / 分类 头 ---------- */
+    .tabs-bar { background: darken(@dark-primary, 15%); }
+
+    .tags-list-more { background: darken(@dark-primary, 15%) !important; }
+
+    .tags-bar.expand {
+        .tags-list {
+            background: @dark-surface;
+            box-shadow: 0 2px 5px 0 rgba(0, 0, 0, .6);
+        }
+        .tags-list-item {
+            color: @dark-text-soft;
+            &.active { background: @dark-accent; color: #fff; }
+        }
+    }
+
+    /* ---------- 搜索 ---------- */
+    .search-panel {
+        background: @dark-surface;
+        box-shadow: 0 2px 5px 0 rgba(0, 0, 0, .6);
+    }
+
+    .search-result {
+        .item { border-top-color: @dark-border; }
+        .title { color: @dark-link; }
+        .tips { color: @dark-text-mute; }
+    }
+
+    /* ---------- 返回顶部 ---------- */
+    #gotop {
+        background: @dark-accent;
+        box-shadow: 0 2px 5px 0 rgba(0, 0, 0, .6);
+    }
+
+    /* ---------- 代码高亮（暗色调） ---------- */
+    .post-content {
+        pre { background: @dark-surface-2; color: @dark-text; }
+        .highlight { background: @dark-surface-2; }
+        .gist { background: @dark-surface-2; }
+        .gist .gist-file { border-color: @dark-border; }
+        .gist .gist-data .line-numbers { color: @dark-text-mute; }
+        .gist .gist-meta { background: @dark-surface; color: @dark-text-mute; }
+        .highlight figcaption { color: @dark-text-mute; }
+        .highlight .gutter pre { color: @dark-text-mute; }
+
+        .comment, .tag   { color: #6a9955; }
+        .keyword,
+        .selector-id,
+        .selector-class,
+        .javascript .function { color: #c586c0; }
+        .string,
+        .value,
+        .inheritance,
+        .header,
+        .ruby .symbol,
+        .xml .cdata,
+        .function,
+        .python .decorator,
+        .python .title,
+        .ruby .function .title,
+        .ruby .title .keyword,
+        .perl .sub,
+        .javascript .title,
+        .coffeescript .title { color: #ce9178; }
+        .title,
+        .type,
+        .variable,
+        .regexp,
+        .ruby .constant,
+        .xml .tag .title,
+        .xml .pi,
+        .xml .doctype,
+        .html .doctype,
+        .selector-pseudo,
+        .css .id,
+        .css .class,
+        .css .pseudo,
+        .tag .name { color: #569cd6; }
+        .number,
+        .class,
+        .preprocessor,
+        .built_in,
+        .literal,
+        .params,
+        .constant { color: #b5cea8; }
+        .attribute,
+        .label,
+        .ruby .class .title,
+        .css .rules .attribute,
+        .tag .attr { color: #9cdcfe; }
+        .selector-tag,
+        .css .hexcolor,
+        .css .tag { color: #4ec9b0; }
+    }
+
+    /* ---------- footer / 打赏 / 分享 / 加载 / valine 等 ---------- */
+    .footer {
+        background: #1a1a1a;
+        color: rgba(255, 255, 255, .5);
+        .top { background: #222; }
+    }
+
+    .loading {
+        background: @dark-bg;
+    }
+
+    /* ---------- 关于页 ---------- */
+    .page-about-me {
+        .content { color: @dark-text-soft; }
+    }
+
+    .page-content {
+        border-bottom-color: @dark-border;
+        .timeline {
+            &:before { background: @dark-border; }
+            h5 { background: @dark-primary; color: #fff; }
+            .item > p { background: @dark-surface; color: @dark-text; }
+            .item > h6 { background: @dark-accent; color: #fff; }
+            .item:after { outline-color: @dark-bg; border-color: @dark-accent; }
+        }
+    }
+
+    /* ---------- 移动端 ---------- */
+    @media screen and (max-width:760px) {
+        .post-card .post-meta { background: @dark-surface; }
+
+        .post-nav .prev,
+        .post-nav .next {
+            background: @dark-surface;
+            border-bottom-color: @dark-border;
+        }
+    }
+}
