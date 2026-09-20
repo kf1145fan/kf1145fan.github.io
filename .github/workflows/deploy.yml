@@ -89,7 +89,7 @@ jobs:
           compatibility_date = "2026-06-03"
 
           [vars]
-          SECURE_DOMAINS = "blog.902786.xyz"
+          SECURE_DOMAINS = "blog.902786.xyz,waline.902786.xyz"
 
           [[d1_databases]]
           binding = "DB"
