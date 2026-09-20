@@ -44,7 +44,7 @@ app.all("*", async (c) => {
     return c.html(renderAdmin());
   }
   if (path === "/ui" || path.startsWith("/ui/")) {
-    return c.html(renderWalineUI(env.WALINE_SERVER || "https://waline.902786.xyz"));
+    return c.html(renderWalineUI(env.WALINE_SERVER || "https://waline.902786.xyz/api"));
   }
   if (path === "/api/login") {
     return json({ ok: checkAuth(c.req.raw, env) }, checkAuth(c.req.raw, env) ? 200 : 401);
