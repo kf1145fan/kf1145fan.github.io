@@ -74,19 +74,6 @@ jobs:
           cd waline-worker
           echo "Cloned version: $(git rev-parse --short HEAD)"
 
-      - name: Patch API routes (remove /api prefix to match official Waline)
-        working-directory: waline-worker
-        run: |
-          # 将 /api/comment 等路由改为 /comment，与官方 Waline 客户端路径一致
-          sed -i 's|app.route("/api/comment"|app.route("/comment"|g' src/index.ts
-          sed -i 's|app.route("/api/article"|app.route("/article"|g' src/index.ts
-          sed -i 's|app.route("/api/user"|app.route("/user"|g' src/index.ts
-          sed -i 's|app.route("/api/token"|app.route("/token"|g' src/index.ts
-          sed -i 's|app.route("/api/settings"|app.route("/settings"|g' src/index.ts
-          sed -i 's|app.route("/api/oauth"|app.route("/oauth"|g' src/index.ts
-          sed -i 's|app.route("/api/db"|app.route("/db"|g' src/index.ts
-          grep 'app.route' src/index.ts
-
       - name: Install deps
         working-directory: waline-worker
         run: pnpm install --frozen-lockfile
