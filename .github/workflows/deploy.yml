@@ -54,37 +54,93 @@ jobs:
           git push -f "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" HEAD:gh-pages -q
 
   # ---- 2. 部署 Waline 评论服务到 Cloudflare Workers ----
+  # 使用社区项目 Waline_On_Worker (https://github.com/lsy-404/Waline_On_Worker)
   deploy-waline:
     runs-on: ubuntu-latest
+    outputs:
+      waline_url: ${{ steps.deploy.outputs.waline_url }}
     steps:
-      - uses: actions/checkout@v4
-
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
-      - name: Install waline-worker deps
+      - name: Install pnpm
+        run: npm install -g pnpm
+
+      - name: Clone Waline_On_Worker
+        run: |
+          git clone --depth 1 https://github.com/lsy-404/Waline_On_Worker.git waline-worker
+          cd waline-worker
+          echo "Cloned version: $(git rev-parse --short HEAD)"
+
+      - name: Install deps
         working-directory: waline-worker
-        run: npm install
+        run: pnpm install --frozen-lockfile
 
-      - name: Deploy waline-worker to Cloudflare
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CF_API_TOKEN }}
-          accountId: ${{ secrets.CF_ACCOUNT_ID }}
-          workingDirectory: waline-worker
-          command: deploy
+      - name: Generate wrangler.toml
+        working-directory: waline-worker
+        env:
+          D1_DB_ID: "5edf90b0-98f2-4258-a7ae-15db7e2ba0f6"
+        run: |
+          cat > wrangler.toml << 'EOF'
+          name = "waline-worker"
+          main = "src/index.ts"
+          compatibility_date = "2026-06-03"
 
-      - name: Initialize D1 database schema
+          [vars]
+          SECURE_DOMAINS = "blog.902786.xyz"
+
+          [[d1_databases]]
+          binding = "DB"
+          database_name = "waline-db"
+          database_id = "PLACEHOLDER_DB_ID"
+          EOF
+          sed -i "s/PLACEHOLDER_DB_ID/$D1_DB_ID/" wrangler.toml
+          cat wrangler.toml
+
+      - name: Generate JWT_SECRET
+        id: jwt
+        run: |
+          # 使用 GitHub 仓库的 WALINE_JWT_SECRET secret，如果没有则随机生成
+          if [ -n "${{ secrets.WALINE_JWT_SECRET }}" ]; then
+            echo "jwt_secret=${{ secrets.WALINE_JWT_SECRET }}" >> $GITHUB_OUTPUT
+          else
+            SECRET=$(node -e "console.log(require('crypto').randomBytes(32).toString('hex'))")
+            echo "jwt_secret=$SECRET" >> $GITHUB_OUTPUT
+            echo "Generated random JWT_SECRET (set WALINE_JWT_SECRET repo secret to persist across deploys)"
+          fi
+
+      - name: Initialize D1 schema
         working-directory: waline-worker
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
         run: |
-          npx wrangler d1 execute waline-db \
-            --file=node_modules/@waline/cloudflare/assets/schema.sql \
-            2>&1 || echo "Schema init may have already run (tables already exist), continuing..."
+          pnpm run db:init 2>&1 || echo "Schema may already exist, continuing..."
+
+      - name: Deploy Waline Worker
+        id: deploy
+        working-directory: waline-worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          JWT_SECRET: ${{ steps.jwt.outputs.jwt_secret }}
+        run: |
+          # 设置 JWT_SECRET
+          echo "$JWT_SECRET" | npx wrangler secret put JWT_SECRET 2>&1 || true
+          
+          # 部署
+          pnpm run deploy 2>&1 | tee deploy.log
+          
+          # 提取部署后的 URL
+          URL=$(grep -oE 'https?://[a-zA-Z0-9.-]+\.workers\.dev' deploy.log | head -1)
+          if [ -z "$URL" ]; then
+            # 备用：根据 worker 名称和账户信息构造
+            URL="https://waline-worker.3168094652.workers.dev"
+          fi
+          echo "waline_url=$URL" >> $GITHUB_OUTPUT
+          echo "Waline deployed at: $URL"
 
   # ---- 3. 部署 blog-worker 到 Cloudflare ----
   deploy-worker:
