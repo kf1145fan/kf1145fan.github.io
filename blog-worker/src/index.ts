@@ -1,18 +1,23 @@
 import { Hono } from "hono";
+import type { Env, UserInfo, Variables } from "./waline/env.js";
+import walineApp from "./waline/subapp.js";
+import { auth } from "./waline/middleware/auth.js";
+import { renderAdminPage } from "./admin-ui.js";
 
-type Bindings = {
+// 整合后的完整 Bindings：博客文章(gh + D1 评论) + Waline(JWT/D1)
+type Bindings = Env & {
+  DB: D1Database;
+  JWT_SECRET?: string;
+  SITE_URL?: string;
+  // 文章发布
   GH_TOKEN?: string;
   GH_REPO?: string;
   GH_BRANCH?: string;
   POSTS_DIR?: string;
-  ADMIN_USER?: string;
-  ADMIN_PASS?: string;
   PAGES_URL?: string;
-  WALINE_SERVER?: string;
-  SITE_URL?: string;
 };
 
-const app = new Hono<{ Bindings: Bindings }>();
+const app = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), {
@@ -20,56 +25,83 @@ const json = (body: unknown, status = 200) =>
     headers: { "content-type": "application/json; charset=utf-8" },
   });
 
-// 简单 Basic Auth 校验
-function checkAuth(req: Request, env: Bindings): boolean {
-  const h = req.headers.get("authorization") || "";
-  const [scheme, b64] = h.split(" ");
-  if (!scheme || scheme.toLowerCase() !== "basic" || !b64) return false;
-  try {
-    const [user, pass] = atob(b64).split(":");
-    return user === (env.ADMIN_USER || "admin") && pass === (env.ADMIN_PASS || "");
-  } catch {
-    return false;
-  }
+// ---------- 1. 统一鉴权（复用 Waline 管理员 JWT）----------
+function isAdmin(user?: UserInfo): boolean {
+  return !!user && user.type === "administrator";
 }
 
-// ---------- 核心：代理 GitHub Pages 静态站点 ----------
+// ---------- 2. Waline 评论系统挂载到 /waline/* ----------
+// 主题中 serverURL 设为 blog.902786.xyz/waline，客户端会自动拼接 /api/xxx
+app.route("/waline", walineApp);
+
+// ---------- 3. 健康检查 ----------
+app.get("/api/health", (c) =>
+  json({ ok: true, worker: "blog-worker", waline: true }),
+);
+
+// ---------- 4. 文章管理 API（需 Waline 管理员 JWT）----------
+app.use("/admin/api/*", auth);
+
+app.get("/admin/api/posts", async (c) => {
+  if (!isAdmin(c.get("userInfo"))) return json({ error: "unauthorized" }, 401);
+  return handleListPosts(c.env as Bindings);
+});
+
+app.get("/admin/api/post", async (c) => {
+  if (!isAdmin(c.get("userInfo"))) return json({ error: "unauthorized" }, 401);
+  const path = c.req.query("path") || "";
+  if (!path) return json({ error: "path required" }, 400);
+  return handleGetPost(c.env as Bindings, path);
+});
+
+app.post("/admin/api/post", async (c) => {
+  if (!isAdmin(c.get("userInfo"))) return json({ error: "unauthorized" }, 401);
+  return handleWritePost(c.env as Bindings, await c.req.json(), false);
+});
+
+app.put("/admin/api/post", async (c) => {
+  if (!isAdmin(c.get("userInfo"))) return json({ error: "unauthorized" }, 401);
+  return handleWritePost(c.env as Bindings, await c.req.json(), true);
+});
+
+app.delete("/admin/api/post", async (c) => {
+  if (!isAdmin(c.get("userInfo"))) return json({ error: "unauthorized" }, 401);
+  const path = c.req.query("path") || "";
+  if (!path) return json({ error: "path required" }, 400);
+  return handleDeletePost(c.env as Bindings, path);
+});
+
+// ---------- 5. /admin 统一管理后台（Waline 风格 + Vditor）----------
+app.get("/admin", (c) => c.html(renderAdminPage(c.env.SITE_URL || "")));
+app.get("/admin/", (c) => c.html(renderAdminPage(c.env.SITE_URL || "")));
+
+// ---------- 6. 其余路径：反向代理 GitHub Pages 静态站点 ----------
 app.all("*", async (c) => {
-  const env = c.env;
-  const path = new URL(c.req.url).pathname;
-  const pagesBase = (env.PAGES_URL || "https://kf1145fan.github.io").replace(/\/$/, "");
+  const env = c.env as Bindings;
+  const url = new URL(c.req.url);
+  const path = url.pathname;
 
-  // 后台与接口不走代理
-  if (path === "/admin" || path.startsWith("/admin/")) {
-    return c.html(renderAdmin());
-  }
+  // /ui（原 waline 后台）并入统一后台 /admin
   if (path === "/ui" || path.startsWith("/ui/")) {
-    return c.html(renderWalineUI(env.WALINE_SERVER || "https://waline.902786.xyz"));
-  }
-  if (path === "/api/login") {
-    return json({ ok: checkAuth(c.req.raw, env) }, checkAuth(c.req.raw, env) ? 200 : 401);
-  }
-  if (path === "/api/posts") {
-    return await handleListPosts(env);
-  }
-  if (path === "/api/publish" && c.req.method === "POST") {
-    return await handlePublish(c.req.raw, env);
-  }
-  if (path === "/api/health") {
-    return json({ ok: true, worker: "blog-worker" });
+    return Response.redirect(`${url.origin}/admin`, 302);
   }
 
-  // 其余路径：代理到 GitHub Pages
+  const pagesBase = (env.PAGES_URL || "https://kf1145fan.github.io").replace(
+    /\/$/,
+    "",
+  );
   const target = new URL(path || "/", pagesBase);
   if (path.endsWith("/")) {
     target.pathname = `${path}index.html`;
   }
   try {
     const resp = await fetch(target.toString());
-    // 404 时回退到站点根
     if (resp.status === 404 && path !== "/") {
       const root = await fetch(pagesBase + "/");
-      return new Response(root.body, { status: 200, headers: root.headers });
+      return new Response(root.body, {
+        status: 200,
+        headers: root.headers,
+      });
     }
     return new Response(resp.body, { status: resp.status, headers: resp.headers });
   } catch (e) {
@@ -77,214 +109,185 @@ app.all("*", async (c) => {
   }
 });
 
-// ---------- 后台：发文章 ----------
-async function handlePublish(req: Request, env: Bindings) {
-  if (!checkAuth(req, env)) {
-    return json({ ok: false, error: "unauthorized" }, 401);
-  }
+// ==================== GitHub 文章 CRUD 逻辑 ====================
+
+function ghConfig(env: Bindings) {
   const token = env.GH_TOKEN;
-  if (!token) {
-    return json({ ok: false, error: "GH_TOKEN not configured" }, 500);
-  }
   const repo = env.GH_REPO || "kf1145fan/kf1145fan.github.io";
   const branch = env.GH_BRANCH || "main";
   const postsDir = env.POSTS_DIR || "source/_posts";
-
-  let body: any;
-  try {
-    body = await req.json();
-  } catch {
-    return json({ ok: false, error: "invalid json" }, 400);
-  }
-  const title = String(body.title || "").trim();
-  const content = String(body.content || "");
-  const tags = Array.isArray(body.tags) ? body.tags.map(String) : [];
-  const categories = Array.isArray(body.categories) ? body.categories.map(String) : [];
-  const date = String(body.date || new Date().toISOString().slice(0, 10));
-
-  if (!title) return json({ ok: false, error: "title required" }, 400);
-  if (!content) return json({ ok: false, error: "content required" }, 400);
-
-  // 生成文件名：date-title.md（与 hexo scaffold 一致）
-  const slug = title
-    .replace(/[^\w\u4e00-\u9fa5\- ]/g, "")
-    .trim()
-    .replace(/\s+/g, "-");
-  const filename = `${date}-${slug || "post"}.md`;
-
-  // front matter
-  const fm: string[] = ["---", `title: '${title.replace(/'/g, "\\'")}'`, `date: ${date} 00:00:00`];
-  if (categories.length) fm.push(`categories:\n  ${categories.map((x: string) => `- ${x}`).join("\n  ")}`);
-  if (tags.length) fm.push(`tags:\n  ${tags.map((x: string) => `- ${x}`).join("\n  ")}`);
-  fm.push("---", "");
-  const fileContent = fm.join("\n") + content + "\n";
-
-  // 通过 GitHub Contents API 写入，触发工作流自动重建
-  const path = `${postsDir}/${filename}`;
-  const rawApi = `https://api.github.com/repos/${repo}/contents/${path}`;
   const headers = {
     authorization: `Bearer ${token}`,
     accept: "application/vnd.github+json",
     "user-agent": "blog-worker",
     "content-type": "application/json",
   };
-
-  // 检查是否已存在，获取 sha
-  let sha: string | undefined;
-  try {
-    const exist = await fetch(rawApi, { headers });
-    if (exist.ok) {
-      sha = (await exist.json() as any).sha;
-    }
-  } catch {}
-
-  const commitInfo = sha
-    ? { message: `docs: update post ${filename}`, content: btoa(unescape(encodeURIComponent(fileContent))), sha }
-    : { message: `docs: add post ${filename}`, content: btoa(unescape(encodeURIComponent(fileContent))) };
-
-  try {
-    const res = await fetch(rawApi, {
-      method: "PUT",
-      headers,
-      body: JSON.stringify({ ...commitInfo, branch }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      return json({ ok: false, error: "github error: " + (data as any).message || res.status }, 502);
-    }
-    return json({ ok: true, filename, path, message: "已提交，工作流会自动重建博客" });
-  } catch (e) {
-    return json({ ok: false, error: String(e) }, 500);
-  }
+  return { token, repo, branch, postsDir, headers };
 }
 
-// ---------- 列出已有文章 ----------
-async function handleListPosts(env: Bindings) {
-  const token = env.GH_TOKEN;
+async function handleListPosts(env: Bindings): Promise<Response> {
+  const { token, repo, postsDir, headers } = ghConfig(env);
   if (!token) return json({ ok: false, error: "GH_TOKEN not configured" }, 500);
-  const repo = env.GH_REPO || "kf1145fan/kf1145fan.github.io";
-  const postsDir = env.POSTS_DIR || "source/_posts";
   try {
-    const res = await fetch(`https://api.github.com/repos/${repo}/contents/${postsDir}`, {
-      headers: { authorization: `Bearer ${token}`, accept: "application/vnd.github+json", "user-agent": "blog-worker" },
-    });
+    const res = await fetch(
+      `https://api.github.com/repos/${repo}/contents/${postsDir}`,
+      { headers },
+    );
     if (!res.ok) return json({ ok: false, error: "github error " + res.status }, 502);
-    const data = await res.json() as any[];
-    const posts = data.map((f) => ({ name: f.name, path: f.path, sha: f.sha, size: f.size }));
+    const data = (await res.json()) as any[];
+    const posts = (data || [])
+      .filter((f) => f.name?.endsWith(".md"))
+      .map((f) => ({ name: f.name, path: f.path, sha: f.sha, size: f.size }));
     return json({ ok: true, posts });
   } catch (e) {
     return json({ ok: false, error: String(e) }, 500);
   }
 }
 
-// ---------- 管理后台 UI ----------
-function renderAdmin(): string {
-  return `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>博客管理后台</title>
-<style>
-:root{--bg:#0f172a;--card:#1e293b;--line:#334155;--txt:#e2e8f0;--muted:#94a3b8;--pri:#38bdf8;--ok:#4ade80;--err:#f87171}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--txt);font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;min-height:100vh}
-.wrap{max-width:860px;margin:0 auto;padding:24px}h1{font-size:22px;margin:0 0 4px}.sub{color:var(--muted);font-size:13px;margin-bottom:20px}
-.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px;margin-bottom:16px}
-.hidden{display:none}label{display:block;font-size:13px;color:var(--muted);margin:10px 0 4px}
-input[type=text],input[type=password],input[type=date],textarea{width:100%;background:#0b1220;border:1px solid var(--line);border-radius:8px;color:var(--txt);padding:10px;font-size:14px;outline:none}
-textarea{min-height:320px;font-family:ui-monospace,Menlo,monospace;resize:vertical}
-input:focus,textarea:focus{border-color:var(--pri)}
-.row{display:flex;gap:10px}.btn{background:var(--pri);color:#04121f;border:0;border-radius:8px;padding:11px 16px;font-size:14px;font-weight:600;cursor:pointer}
-.btn:hover{filter:brightness(1.1)}.btn-ghost{background:transparent;color:var(--muted);border:1px solid var(--line)}
-.msg{margin-top:12px;font-size:13px}.ok{color:var(--ok)}.err{color:var(--err)}
-.post-list{list-style:none;margin:0;padding:0}.post-list li{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--line);font-size:14px}
-.post-list li .name{color:var(--txt)}.post-list li a{color:var(--pri);text-decoration:none}
-.badge{display:inline-block;background:#0b1220;border:1px solid var(--line);color:var(--muted);border-radius:6px;padding:4px 8px;font-size:12px;margin-left:6px}
-</style></head><body><div class="wrap">
-<h1>博客管理后台</h1><div class="sub">blog-worker · 发文章自动触发 GitHub 工作流</div>
-
-<div class="card" id="loginCard">
-  <div class="row"><input type="text" id="user" placeholder="账号"/></div>
-  <div style="margin-top:10px"><input type="password" id="pass" placeholder="密码"/></div>
-  <div style="margin-top:14px"><button class="btn" id="loginBtn">登录</button></div>
-  <div class="msg" id="loginMsg"></div>
-</div>
-
-<div class="card hidden" id="panel">
-  <div class="row" style="align-items:center;justify-content:space-between">
-    <div style="font-weight:600">发布新文章</div>
-    <button class="btn btn-ghost" id="logoutBtn">退出</button>
-  </div>
-  <label>标题</label><input type="text" id="title" placeholder="文章标题"/>
-  <div class="row">
-    <div style="flex:1"><label>日期</label><input type="date" id="date"/></div>
-    <div style="flex:1"><label>分类（逗号分隔）</label><input type="text" id="categories" placeholder="分类"/></div>
-  </div>
-  <label>标签（逗号分隔）</label><input type="text" id="tags" placeholder="标签"/>
-  <label>正文（Markdown）</label><textarea id="content" placeholder="# 标题&#10;&#10;正文内容..."></textarea>
-  <div style="margin-top:14px"><button class="btn" id="pubBtn">发布文章</button></div>
-  <div class="msg" id="pubMsg"></div>
-
-  <label style="margin-top:24px">已有文章</label>
-  <ul class="post-list" id="postList"></ul>
-</div>
-
-</div>
-<script>
-const b64u=u=>btoa(unescape(encodeURIComponent(u)));
-let auth='';
-const setMsg=(el,t,ok)=>{el.textContent=t;el.className='msg '+(ok?'ok':'err');};
-document.getElementById('loginBtn').onclick=async()=>{
-  const user=document.getElementById('user').value,pass=document.getElementById('pass').value;
-  auth='Basic '+b64u(user+':'+pass);
-  const r=await fetch('/api/login',{headers:{authorization:auth}});
-  if(r.ok){document.getElementById('loginCard').classList.add('hidden');document.getElementById('panel').classList.remove('hidden');
-    document.getElementById('date').value=new Date().toISOString().slice(0,10);loadPosts();}
-  else setMsg(document.getElementById('loginMsg'),'登录失败，账号或密码错误',false);
-};
-document.getElementById('logoutBtn').onclick=()=>{auth='';location.reload();};
-document.getElementById('pubBtn').onclick=async()=>{
-  const title=document.getElementById('title').value.trim();
-  const content=document.getElementById('content').value;
-  const tags=document.getElementById('tags').value.split(/[,，]/).map(s=>s.trim()).filter(Boolean);
-  const categories=document.getElementById('categories').value.split(/[,，]/).map(s=>s.trim()).filter(Boolean);
-  const date=document.getElementById('date').value;
-  const msg=document.getElementById('pubMsg');
-  if(!title||!content){setMsg(msg,'请填写标题和正文',false);return;}
-  setMsg(msg,'正在提交并触发工作流...',true);
-  const r=await fetch('/api/publish',{method:'POST',headers:{authorization:auth,'content-type':'application/json'},body:JSON.stringify({title,content,tags,categories,date})});
-  const d=await r.json();
-  if(d.ok){setMsg(msg,'发布成功：'+d.filename+'（工作流会自动重建，约1-2分钟后生效）',true);
-    document.getElementById('title').value='';document.getElementById('content').value='';loadPosts();}
-  else setMsg(msg,'发布失败：'+(d.error||r.status),false);
-};
-async function loadPosts(){
-  const ul=document.getElementById('postList');ul.innerHTML='';
-  const r=await fetch('/api/posts',{headers:{authorization:auth}});
-  if(!r.ok)return;
-  const d=await r.json();
-  (d.posts||[]).slice().reverse().forEach(p=>{
-    const li=document.createElement('li');
-    li.innerHTML='<span class="name">'+p.name+'</span><a href="/" target="_blank">查看站点</a>';
-    ul.appendChild(li);
-  });
-}
-</script></body></html>`;
+async function handleGetPost(env: Bindings, path: string): Promise<Response> {
+  const { token, repo, headers } = ghConfig(env);
+  if (!token) return json({ ok: false, error: "GH_TOKEN not configured" }, 500);
+  try {
+    const res = await fetch(
+      `https://api.github.com/repos/${repo}/contents/${encodeURIComponent(path)}`,
+      { headers },
+    );
+    if (!res.ok) return json({ ok: false, error: "github error " + res.status }, 502);
+    const data = (await res.json()) as any;
+    const raw = decodeURIComponent(escape(atob(data.content)));
+    const parsed = parseFrontMatter(raw);
+    return json({
+      ok: true,
+      post: { path: data.path, sha: data.sha, content: raw, ...parsed },
+    });
+  } catch (e) {
+    return json({ ok: false, error: String(e) }, 500);
+  }
 }
 
-// ---------- Waline 评论 UI ----------
-function renderWalineUI(server: string): string {
-  return `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>评论</title>
-<style>body{margin:0;background:#fff;font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif}
-.wrap{max-width:760px;margin:0 auto;padding:20px}h1{font-size:18px}</style>
-<link rel="stylesheet" href="https://unpkg.com/@waline/client@v3/dist/waline.css"/>
-</head><body><div class="wrap">
-<h1>博客评论</h1>
-<div id="wl-comment"></div>
-<script type="module">
-import { init } from 'https://unpkg.com/@waline/client@v3/dist/waline.js';
-init({el:'#wl-comment',serverURL:${JSON.stringify(server)},lang:'zh-CN',dark:'auto',path:location.pathname.replace(/index\\.html$/,'')});
-</script>
-</div></body></html>`;
+async function handleWritePost(
+  env: Bindings,
+  body: any,
+  isUpdate: boolean,
+): Promise<Response> {
+  const { token, repo, branch, postsDir, headers } = ghConfig(env);
+  if (!token) return json({ ok: false, error: "GH_TOKEN not configured" }, 500);
+
+  const title = String(body.title || "").trim();
+  const content = String(body.content || "");
+  const tags = Array.isArray(body.tags) ? body.tags.map((x: any) => String(x)) : [];
+  const categories = Array.isArray(body.categories)
+    ? body.categories.map((x: any) => String(x))
+    : [];
+  const date = String(body.date || new Date().toISOString().slice(0, 10));
+  const targetPath = String(body.path || "").trim();
+
+  if (!title) return json({ ok: false, error: "title required" }, 400);
+  if (!content) return json({ ok: false, error: "content required" }, 400);
+
+  const slug = title
+    .replace(/[^\w\u4e00-\u9fa5\- ]/g, "")
+    .trim()
+    .replace(/\s+/g, "-");
+  const filename = isUpdate && targetPath ? targetPath.split("/").pop()! : `${date}-${slug || "post"}.md`;
+  const path = isUpdate && targetPath ? targetPath : `${postsDir}/${filename}`;
+
+  // front matter
+  const fm: string[] = ["---", `title: '${title.replace(/'/g, "\\'")}'`, `date: ${date} 00:00:00`];
+  if (categories.length) fm.push(`categories:\n  ${categories.map((x: any) => `- ${x}`).join("\n  ")}`);
+  if (tags.length) fm.push(`tags:\n  ${tags.map((x: any) => `- ${x}`).join("\n  ")}`);
+  fm.push("---", "");
+  const fileContent = fm.join("\n") + (isUpdate ? stripFrontMatter(content) : content) + "\n";
+
+  const rawApi = `https://api.github.com/repos/${repo}/contents/${encodeURIComponent(path)}`;
+  let sha: string | undefined;
+  try {
+    const exist = await fetch(rawApi, { headers });
+    if (exist.ok) sha = ((await exist.json()) as any).sha;
+  } catch {}
+
+  const payload: any = {
+    message: isUpdate ? `docs: update post ${filename}` : `docs: add post ${filename}`,
+    content: btoa(unescape(encodeURIComponent(fileContent))),
+    branch,
+  };
+  if (sha) payload.sha = sha;
+
+  try {
+    const res = await fetch(rawApi, { method: "PUT", headers, body: JSON.stringify(payload) });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return json({ ok: false, error: "github error: " + (data as any).message || res.status }, 502);
+    return json({ ok: true, path, filename, message: "已提交，工作流会自动重建博客" });
+  } catch (e) {
+    return json({ ok: false, error: String(e) }, 500);
+  }
+}
+
+async function handleDeletePost(env: Bindings, path: string): Promise<Response> {
+  const { token, repo, branch, headers } = ghConfig(env);
+  if (!token) return json({ ok: false, error: "GH_TOKEN not configured" }, 500);
+  try {
+    const rawApi = `https://api.github.com/repos/${repo}/contents/${encodeURIComponent(path)}`;
+    const exist = await fetch(rawApi, { headers });
+    if (!exist.ok) return json({ ok: false, error: "not found" }, 404);
+    const sha = ((await exist.json()) as any).sha;
+    const res = await fetch(rawApi, {
+      method: "DELETE",
+      headers,
+      body: JSON.stringify({ sha, message: `docs: delete post ${path}`, branch }),
+    });
+    if (!res.ok) return json({ ok: false, error: "github error " + res.status }, 502);
+    return json({ ok: true, message: "已删除" });
+  } catch (e) {
+    return json({ ok: false, error: String(e) }, 500);
+  }
+}
+
+// ---------- front matter 解析 ----------
+function parseFrontMatter(raw: string): {
+  title: string;
+  date: string;
+  categories: string[];
+  tags: string[];
+  body: string;
+} {
+  let title = "";
+  const categories: string[] = [];
+  const tags: string[] = [];
+  let date = "";
+  let body = raw;
+  const m = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
+  if (m) {
+    const fm = m[1];
+    body = m[2];
+    const is = fm.match(/^title:\s*['"]?(.*?)['"]?\s*$/m);
+    const ds = fm.match(/^date:\s*(\d{4}-\d{2}-\d{2})/m);
+    const cs = fm.match(/^categories:\s*([^\r\n]*)(?:\r?\n([\s\S]*?))?(?=\r?\n[a-zA-Z0-9_]+:|$)/im);
+    const ts = fm.match(/^tags:\s*([^\r\n]*)(?:\r?\n([\s\S]*?))?(?=\r?\n[a-zA-Z0-9_]+:|$)/im);
+    if (is) title = is[1].trim();
+    if (ds) date = ds[1];
+    const parseList = (inline: string | undefined, multi: string | undefined): string[] => {
+      const out: string[] = [];
+      if (inline && inline.trim()) {
+        out.push(...inline.replace(/[[\]"]/g, "").split(",").map((s) => s.trim()).filter(Boolean));
+      }
+      if (multi) {
+        for (const line of multi.split("\n")) {
+          const v = line.trim().replace(/^-\s*/, "").trim();
+          if (v) out.push(v);
+        }
+      }
+      return out;
+    };
+    if (cs) categories.push(...parseList(cs[1], cs[2]));
+    if (ts) tags.push(...parseList(ts[1], ts[2]));
+  }
+  return { title, date, categories, tags, body: body.replace(/<!--\s*more\s*-->[\s\S]*$/, "").trimStart() };
+}
+
+function stripFrontMatter(content: string): string {
+  const m = content.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?([\s\S]*)$/);
+  return (m ? m[1] : content).trimStart();
 }
 
 export default app;

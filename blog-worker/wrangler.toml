@@ -1,24 +1,34 @@
 name = "blog-worker"
 main = "src/index.ts"
-compatibility_date = "2024-11-01"
-nodejs_compat = true
+compatibility_date = "2026-06-03"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = false
 
-# 通过 Cloudflare dashboard / workflow 注入的环境变量（作为 secret 或 var）：
-# GH_TOKEN                 GitHub Personal Access Token（有仓库读写权限，用于发布文章）
+# 环境变量（作为 secret 或 var 注入）：
+# GH_TOKEN                 GitHub PAT（仓库读写，用于发布/更新/删除博客文章）
 # GH_REPO                  形如 kf1145fan/kf1145fan.github.io
 # GH_BRANCH                hexo 源分支，默认 main
 # POSTS_DIR                hexo 文章目录，默认 source/_posts
-# ADMIN_USER / ADMIN_PASS  管理后台账号密码
 # PAGES_URL                GitHub Pages 站点地址，默认 https://kf1145fan.github.io
-# WALINE_SERVER            Waline 服务端地址，默认 https://waline.wn5.top
 # SITE_URL                 博客对外域名，默认 https://blog.902786.xyz
+# JWT_SECRET               评论后台管理员 JWT 密钥（务必设置，用于 /admin 登录）
+# SECURE_DOMAINS           评论 CORS 允许的域名，逗号分隔（默认放行）
 
 [vars]
-ADMIN_USER = "admin"
-ADMIN_PASS = "158899ab@"
 GH_REPO = "kf1145fan/kf1145fan.github.io"
 GH_BRANCH = "main"
 POSTS_DIR = "source/_posts"
 PAGES_URL = "https://kf1145fan.github.io"
-WALINE_SERVER = "https://waline.902786.xyz"
 SITE_URL = "https://blog.902786.xyz"
+
+# Waline 评论数据存储：D1 数据库（沿用 waline-db，评论数据已在此库中）
+[[d1_databases]]
+binding = "DB"
+database_name = "waline-db"
+database_id = "5edf90b0-98f2-4258-a7ae-15db7e2ba0f6"
+migrations_dir = "migrations"
+
+# 自定义域名路由（如已绑定则保留）
+# [[routes]]
+# pattern = "blog.902786.xyz"
+# custom_domain = true

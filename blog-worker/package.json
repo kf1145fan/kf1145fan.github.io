@@ -9,6 +9,7 @@
     "build": "wrangler deploy --dry-run --outdir dist"
   },
   "dependencies": {
+    "bcryptjs": "^3.0.3",
     "hono": "^4.6.0"
   },
   "devDependencies": {
