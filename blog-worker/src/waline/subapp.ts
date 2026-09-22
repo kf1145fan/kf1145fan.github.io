@@ -94,6 +94,7 @@ app.get("/api/_probe", async (c) => {
 		has_secret: !!c.env.JWT_SECRET,
 		auth_header: header ? "present(" + header.length + ")" : "none",
 		query_token_present: !!tkQuery,
+		authDiag: c.get("authDiag"),
 		manual,
 	});
 });
