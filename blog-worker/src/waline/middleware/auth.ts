@@ -33,7 +33,7 @@ export const auth = createMiddleware<{
 
 		// Fetch user from DB
 		const user = await c.env.DB.prepare(
-			'SELECT id, display_name, email, type, url, avatar, label, github, twitter, facebook, google, weibo, qq, "2fa" FROM wl_Users WHERE id = ?',
+			"SELECT * FROM wl_Users WHERE id = ?",
 		)
 			.bind(payload.id)
 			.first();
