@@ -160,14 +160,15 @@ jobs:
         working-directory: blog-worker
         run: npm install
 
-      - name: Ensure JWT_SECRET exists (persistent via repo secret, fallback random)
+      - name: Ensure JWT_SECRET exists (persistent via repo secret, fallback fixed)
         id: jwt
         run: |
           if [ -n "${{ secrets.JWT_SECRET }}" ]; then
-            echo "jwt_secret=${{ secrets.JWT_SECRET }}" >> $GITHUB_OUTPUT
+            echo "${{ secrets.JWT_SECRET }}" > .jwt_secret
           else
-            echo "jwt_secret=$(node -e "console.log(require('crypto').randomBytes(32).toString('hex'))")" >> $GITHUB_OUTPUT
+            echo "kfBlog_Waline_1w5zD9pQrT" > .jwt_secret
           fi
+          echo "jwt_secret=$(cat .jwt_secret)" >> $GITHUB_OUTPUT
 
       # D1 表结构已由 waline-db 初始化；先尝试 apply，失败不阻断部署（若需手工初始化再处理）
       - name: Apply D1 migrations (create comment tables)
@@ -186,9 +187,9 @@ jobs:
           accountId: ${{ secrets.CF_ACCOUNT_ID }}
           workingDirectory: blog-worker
           command: deploy
-          env: |
-            SITE_URL
+          secrets: |
+            GH_TOKEN
+            JWT_SECRET
         env:
-          SITE_URL: https://blog.902786.xyz
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           JWT_SECRET: ${{ steps.jwt.outputs.jwt_secret }}
