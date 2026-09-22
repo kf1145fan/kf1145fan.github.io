@@ -180,9 +180,12 @@ function enterApp(name){
 function logout(){ token=''; try{ localStorage.removeItem('TOKEN'); }catch(e){} location.reload(); }
 
 // ---------- tab ----------
+function showPage(name){
+  $$('.wk-page').forEach(p=>p.classList.toggle('hidden', p.id!=='page-'+name));
+}
 function switchTab(name){
   $$('.wk-tab').forEach(t=>t.classList.toggle('active', t.dataset.tab===name));
-  $$('.wk-page').forEach(p=>p.classList.toggle('hidden', p.id!=='page-'+name));
+  showPage(name);
   if(name==='manage') loadPosts();
   if(name==='write') ensureEditor();
   if(name==='comments') loadComments();
@@ -226,7 +229,8 @@ async function openEdit(path){
   $('#editorTitle').textContent = '编辑文章：' + (p.title || nameOf(p.path));
   $('#saveBtn').textContent = '保存修改';
   preserveValue(p.body || '');
-  switchTab('write');
+  showPage('write');
+  ensureEditor();
   window.scrollTo(0,0);
 }
 function nameOf(path){ return String(path||'').split('/').pop().replace(/\\.md$/,'') || '未命名'; }
@@ -236,9 +240,11 @@ function newArticle(){
   $('#editorTitle').textContent='发布新文章';
   $('#saveBtn').textContent='发布文章';
   preserveValue('');
-  switchTab('write');
+  showPage('write');
+  ensureEditor();
   window.scrollTo(0,0);
 }
+function backToManage(){ showPage('manage'); loadPosts(); }
 // 供 openEdit/newArticle 在切换 tab 后填入 Vditor
 let pendingEditorValue = '';
 function preserveValue(v){ pendingEditorValue = v || ''; }
@@ -290,31 +296,32 @@ function ensureEditor(){
 }
 function initEditor(value){
   const options = {
-    height: 480,
+    height: 500,
     value: value || '',
     lang: 'zh-CN',
-    mode: 'sv',                       // 分屏预览（与 cp.802213.xyz 一致）
-    theme: 'light',
+    mode: 'wysiwyg',                  // 所见即所得（与 ld246.com 官方默认一致，可切换分屏/即时渲染）
+    theme: 'classic',
+    icon: 'ant',
     outline: true,
     cache: { enable: false },
     preview: {
       mode: 'both',
       delay: 500,
-      hljs: { lineNumber: true , style:'github'},
-      markdown: { toc: true, mark: true, math: true, codeBlockPreview: true, at: true },
+      hljs: { lineNumber: true, style: 'github' },
+      markdown: { toc: true, mark: true, math: true, codeBlockPreview: true, at: true, gfmAutoLink: true },
       tex: { inline: true, display: true },
-      theme: { current: 'light', path: 'https://cdn.jsdelivr.net/npm/vditor@3.11.1/dist/css/content-theme' }
+      theme: { current: 'light', list: {}, path: 'https://cdn.jsdelivr.net/npm/vditor@3.11.1/dist/css/content-theme' }
     },
     previewTheme: 'light',
     toolbarConfig: { pin: true },
     toolbar: [
       'emoji','headings','bold','italic','strike','link','|',
       'list','ordered-list','check','outdent','indent','|',
-      'quote','line','code','inline-code','|',
-      'insert-before','insert-after','table','|',
-      'undo','redo','|','upload','echo','|','fullscreen','edit-mode','preview'
+      'quote','line','code','inline-code','insert-before','insert-after','|',
+      'table','undo','redo','|','upload','record','|',
+      'edit-mode','both','preview','fullscreen','outline','export'
     ],
-    upload: { fieldName:'file', max: 5, encoding:'base64', insertTo: 2, linkToImgUrl: true },
+    upload: { fieldName: 'file', max: 5, encoding: 'base64', insertTo: 2, linkToImgUrl: true },
     after: () => { editorInited = true; pendingEditorValue=''; }
   };
   editor = new Vditor('edt', options);
@@ -439,7 +446,6 @@ export function renderAdminPage(siteUrl: string): string {
 <div id="appView" class="hidden">
   <div class="wk-tabs">
     <button class="wk-tab active" data-tab="manage">管理文章</button>
-    <button class="wk-tab" data-tab="write">添加新文章</button>
     <button class="wk-tab" data-tab="comments">评论管理</button>
   </div>
   <div class="wk-wrap">
@@ -460,7 +466,10 @@ export function renderAdminPage(siteUrl: string): string {
       <div class="wk-card">
         <div class="toolbar" style="justify-content:space-between;align-items:center">
           <h3 class="wk-title" style="margin:0;border:none;padding:0" id="editorTitle">发布新文章</h3>
-          <button class="wk-btn ghost sm" onclick="newArticle()">清空重写</button>
+          <div style="display:flex;gap:8px">
+            <button class="wk-btn ghost sm" onclick="backToManage()">← 返回管理文章</button>
+            <button class="wk-btn ghost sm" onclick="newArticle()">清空重写</button>
+          </div>
         </div>
         <label class="wk-label">标题</label>
         <input class="wk-input" id="title" placeholder="文章标题">
