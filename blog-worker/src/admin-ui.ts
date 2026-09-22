@@ -267,21 +267,35 @@ async function delPost(path, name){
   else toast('删除失败：'+(r.data&&r.data.error||r.status),'err');
 }
 
-// ---------- Vditor 编辑器 ----------
+// ---------- Vditor 编辑器（CloudPaste 同款配置，参考 cp.802213.xyz）----------
 function initEditor(value){
-  if(!window.Vditor){ // 兜底等待
+  if(!window.Vditor){ // 兜底等待 CDN 加载
     setTimeout(()=>initEditor(value),300); return;
   }
   const options = {
     height: 420,
-    value: value||'',
+    value: value || '',
     lang: 'zh-CN',
-    mode: 'ir',                       // 即时渲染（CloudPaste 同款）
+    mode: 'sv',                       // 分屏预览（与 cp.802213.xyz 一致）
+    theme: 'light',
     outline: false,
     cache: { enable: false },
-    preview: { mode: 'both', markdown: { toc: true, math: true } },
+    preview: {
+      mode: 'both',
+      delay: 500,
+      hljs: { lineNumber: true },
+      markdown: { toc: true, mark: true, math: true },
+      theme: { current: 'light', path: 'https://cdn.jsdelivr.net/npm/vditor@3.11.1/dist/css/content-theme' }
+    },
+    previewTheme: 'light',
     toolbarConfig: { pin: true },
-    toolbar: ['headings','bold','italic','strike','line','quote','list','ordered-list','check','outdent','indent','code','inline-code','link','table','undo','redo','fullscreen','export','preview','edit-mode'],
+    toolbar: [
+      'emoji','headings','bold','italic','strike','link','|',
+      'list','ordered-list','check','outdent','indent','|',
+      'quote','line','code','inline-code','|',
+      'insert-before','insert-after','table','|',
+      'undo','redo','|','import','export','preview','fullscreen','edit-mode'
+    ],
     upload: { fieldName:'file', max: 5, encoding:'base64', insertTo: 2, linkToImgUrl: true },
     after: () => { document.dispatchEvent(new Event('editorReady')); }
   };

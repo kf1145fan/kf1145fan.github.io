@@ -154,7 +154,13 @@ function base64UrlEncode(data: string | ArrayBuffer): string {
 }
 
 function base64UrlDecode(str: string): ArrayBuffer {
-	const padded = str.replace(/-/g, "+").replace(/_/g, "/");
+	// Convert base64url back to standard base64 and restore the optional padding.
+	// JWT payload/signature parts have trailing '=' removed; without padding atob()
+	// throws InvalidCharacterError when the length is not a multiple of 4, silently
+	// breaking JWT verification (login succeeds, but every authed request is 401).
+	const base64 = str.replace(/-/g, "+").replace(/_/g, "/");
+	const padded =
+		base64 + "=".repeat((4 - (base64.length % 4)) % 4);
 	const binary = atob(padded);
 	const bytes = new Uint8Array(binary.length);
 	for (let i = 0; i < binary.length; i++) {
