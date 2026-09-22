@@ -188,6 +188,7 @@ jobs:
           command: deploy
           env: |
             SITE_URL
-          secrets: |
-            GH_TOKEN
-            JWT_SECRET
+        env:
+          SITE_URL: https://blog.902786.xyz
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          JWT_SECRET: ${{ steps.jwt.outputs.jwt_secret }}
