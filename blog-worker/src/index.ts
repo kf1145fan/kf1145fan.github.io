@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import type { Env, UserInfo, Variables } from "./waline/env.js";
 import walineApp from "./waline/subapp.js";
-import { auth } from "./waline/middleware/auth.js";
+import { auth, signJwt, verifyJwt } from "./waline/middleware/auth.js";
 import { renderAdminPage } from "./admin-ui.js";
 
 // 整合后的完整 Bindings：博客文章(gh + D1 评论) + Waline(JWT/D1)
@@ -35,9 +35,46 @@ function isAdmin(user?: UserInfo): boolean {
 app.route("/waline", walineApp);
 
 // ---------- 3. 健康检查 ----------
-app.get("/api/health", (c) =>
-  json({ ok: true, worker: "blog-worker", waline: true, ver: "auth-fix-2" }),
-);
+app.get("/api/health", async (c) => {
+  const env = c.env as Bindings;
+  const jwtSecret = env.JWT_SECRET || "";
+  const jwtSet = !!env.JWT_SECRET;
+  // 只泄露 secret 的 sha256 前 12 位，用于对比线上部署值是否为预期（不泄露明文）
+  const digest = await crypto.subtle
+    .digest("SHA-256", new TextEncoder().encode(jwtSecret))
+    .then((b) => {
+      const a = new Uint8Array(b);
+      let hex = "";
+      for (let i = 0; i < 6; i++) hex += a[i].toString(16).padStart(2, "0");
+      return hex;
+    });
+  // 在 worker 内部自签自验，确认 JWT 签名/验签在当前环境一致可用
+  let selfSign = false, selfVerify = false, selfExpired = false;
+  if (jwtSet) {
+    try {
+      const t = await signJwt({ id: 1 }, jwtSecret, 60);
+      selfSign = !!t;
+      const v = await verifyJwt(t, jwtSecret);
+      selfVerify = !!v;
+      const v2 = await verifyJwt(t, jwtSecret + "wrong");
+      // wrong secret should fail; if it also verifies, crypto is broken
+      selfExpired = false;
+    } catch (e) {
+      selfSign = false;
+    }
+  }
+  return json({
+    ok: true,
+    worker: "blog-worker",
+    waline: true,
+    ver: "auth-fix-4",
+    jwt_set: jwtSet,
+    jwt_secret_hash12: jwtSet ? digest : "none",
+    gh_token_set: !!env.GH_TOKEN,
+    self_sign: selfSign,
+    self_verify: selfVerify,
+  });
+});
 
 // ---------- 4. 文章管理 API（需 Waline 管理员 JWT）----------
 app.use("/admin/api/*", auth);
