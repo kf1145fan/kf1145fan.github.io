@@ -64,6 +64,16 @@ app.use("*", async (c, next) => {
 // Auth middleware - parse JWT on all routes (non-blocking, skips if no token)
 app.use("*", auth);
 
+// 诊断：返回 auth 中间件在此子应用内的处理结果（放在 auth 之后才有意义）
+app.get("/api/_probe", async (c) => {
+	const ui = c.get("userInfo") as any;
+	return c.json({
+		has_user_info: !!ui,
+		userInfo: ui ? { id: ui.objectId, email: ui.email, type: ui.type } : null,
+		has_secret: !!c.env.JWT_SECRET,
+	});
+});
+
 // Global error handler (catches malformed JSON bodies, etc.)
 app.onError((err, c) => {
 	if (err instanceof SyntaxError) {
