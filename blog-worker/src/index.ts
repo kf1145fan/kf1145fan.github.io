@@ -67,14 +67,34 @@ app.get("/api/health", async (c) => {
     ok: true,
     worker: "blog-worker",
     waline: true,
-    ver: "auth-fix-4",
+    ver: "auth-fix-5",
     jwt_set: jwtSet,
     jwt_secret_hash12: jwtSet ? digest : "none",
     gh_token_set: !!env.GH_TOKEN,
     self_sign: selfSign,
     self_verify: selfVerify,
+    // 若传入 ?tk=<token>，运行与 auth 中间件完全一致的验证+DB 取用户流程
+    probe: await authProbe(c, jwtSet ? jwtSecret : ""),
   });
 });
+
+async function authProbe(c: any, secret: string): Promise<any> {
+  const tk = c.req.query("tk");
+  if (!tk) return "no-tk";
+  if (!secret) return { ok: false, step: "no-secret" };
+  try {
+    const payload = await verifyJwt(tk, secret);
+    if (!payload?.id) return { ok: false, step: "verify-failed", payload };
+    const user = await (c.env as Bindings).DB.prepare(
+      'SELECT id, display_name, email, type FROM wl_Users WHERE id = ?',
+    ).bind(payload.id).first();
+    if (!user) return { ok: false, step: "user-not-found", id: payload.id };
+    if (user.type === "banned") return { ok: false, step: "banned", id: payload.id };
+    return { ok: true, step: "ok", id: payload.id, email: user.email, type: user.type };
+  } catch (e) {
+    return { ok: false, step: "exception", msg: String(e) };
+  }
+}
 
 // ---------- 4. 文章管理 API（需 Waline 管理员 JWT）----------
 app.use("/admin/api/*", auth);
