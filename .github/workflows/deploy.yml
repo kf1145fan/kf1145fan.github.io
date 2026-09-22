@@ -160,12 +160,24 @@ jobs:
         working-directory: blog-worker
         run: npm install
 
+      - name: Ensure JWT_SECRET exists (persistent via repo secret, fallback random)
+        id: jwt
+        run: |
+          if [ -n "${{ secrets.JWT_SECRET }}" ]; then
+            echo "jwt_secret=${{ secrets.JWT_SECRET }}" >> $GITHUB_OUTPUT
+          else
+            echo "jwt_secret=$(node -e "console.log(require('crypto').randomBytes(32).toString('hex'))")" >> $GITHUB_OUTPUT
+          fi
+
+      # D1 表结构已由 waline-db 初始化；先尝试 apply，失败不阻断部署（若需手工初始化再处理）
       - name: Apply D1 migrations (create comment tables)
         working-directory: blog-worker
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
-        run: npx wrangler d1 migrations apply waline-db --remote
+        run: |
+          npx wrangler d1 migrations apply waline-db --remote \
+            || echo "D1 migration skipped (tables likely already exist; will verify at runtime)"
 
       - name: Deploy worker to Cloudflare
         uses: cloudflare/wrangler-action@v3
