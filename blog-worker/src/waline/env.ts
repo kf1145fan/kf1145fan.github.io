@@ -60,5 +60,4 @@ export interface UserInfo {
 export interface Variables {
 	userInfo?: UserInfo;
 	secureDomainsResolved?: string;
-	authDiag?: any;
 }

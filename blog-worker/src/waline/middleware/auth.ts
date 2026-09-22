@@ -10,9 +10,6 @@ export const auth = createMiddleware<{
 	Bindings: Env;
 	Variables: Variables;
 }>(async (c, next) => {
-	const setDiag = (v: any) => {
-		try { (c as any).set("authDiag", v); } catch {}
-	};
 	// Check Authorization header first, then URL ?token= query param
 	const header = c.req.header("Authorization");
 	let token: string | undefined;
@@ -24,7 +21,6 @@ export const auth = createMiddleware<{
 		const urlToken = new URL(c.req.url).searchParams.get("token");
 		if (urlToken) token = urlToken;
 	}
-	setDiag({ header: header ? "present(" + header.length + ")" : "none", token: token ? "yes(" + token.length + ")" : "no", has_secret: !!c.env.JWT_SECRET });
 	if (!token) return next();
 
 	try {
@@ -33,15 +29,15 @@ export const auth = createMiddleware<{
 		if (!jwtSecret) return next();
 
 		const payload = await verifyJwt(token, jwtSecret);
-		if (!payload?.id) { setDiag({ payload: payload, verified_null: true }); return next(); }
+		if (!payload?.id) return next();
 
 		// Fetch user from DB
 		const user = await c.env.DB.prepare(
-			'SELECT id, display_name, email, type FROM wl_Users WHERE id = ?',
+			'SELECT id, display_name, email, type, url, avatar, label, github, twitter, facebook, google, weibo, qq, "2fa" FROM wl_Users WHERE id = ?',
 		)
 			.bind(payload.id)
 			.first();
-		setDiag({ payload_id: payload.id, user_found: !!user, user_type: user ? (user as any).type : null });
+
 		if (user && user.type !== "banned") {
 			c.set("userInfo", {
 				objectId: user.id as number,

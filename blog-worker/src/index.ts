@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import type { Env, UserInfo, Variables } from "./waline/env.js";
 import walineApp from "./waline/subapp.js";
-import { auth, signJwt, verifyJwt } from "./waline/middleware/auth.js";
+import { auth } from "./waline/middleware/auth.js";
 import { renderAdminPage } from "./admin-ui.js";
 
 // 整合后的完整 Bindings：博客文章(gh + D1 评论) + Waline(JWT/D1)
@@ -37,64 +37,16 @@ app.route("/waline", walineApp);
 // ---------- 3. 健康检查 ----------
 app.get("/api/health", async (c) => {
   const env = c.env as Bindings;
-  const jwtSecret = env.JWT_SECRET || "";
   const jwtSet = !!env.JWT_SECRET;
-  // 只泄露 secret 的 sha256 前 12 位，用于对比线上部署值是否为预期（不泄露明文）
-  const digest = await crypto.subtle
-    .digest("SHA-256", new TextEncoder().encode(jwtSecret))
-    .then((b) => {
-      const a = new Uint8Array(b);
-      let hex = "";
-      for (let i = 0; i < 6; i++) hex += a[i].toString(16).padStart(2, "0");
-      return hex;
-    });
-  // 在 worker 内部自签自验，确认 JWT 签名/验签在当前环境一致可用
-  let selfSign = false, selfVerify = false, selfExpired = false;
-  if (jwtSet) {
-    try {
-      const t = await signJwt({ id: 1 }, jwtSecret, 60);
-      selfSign = !!t;
-      const v = await verifyJwt(t, jwtSecret);
-      selfVerify = !!v;
-      const v2 = await verifyJwt(t, jwtSecret + "wrong");
-      // wrong secret should fail; if it also verifies, crypto is broken
-      selfExpired = false;
-    } catch (e) {
-      selfSign = false;
-    }
-  }
   return json({
     ok: true,
     worker: "blog-worker",
     waline: true,
-    ver: "auth-fix-5",
+    ver: "1.0.0",
     jwt_set: jwtSet,
-    jwt_secret_hash12: jwtSet ? digest : "none",
     gh_token_set: !!env.GH_TOKEN,
-    self_sign: selfSign,
-    self_verify: selfVerify,
-    // 若传入 ?tk=<token>，运行与 auth 中间件完全一致的验证+DB 取用户流程
-    probe: await authProbe(c, jwtSet ? jwtSecret : ""),
   });
 });
-
-async function authProbe(c: any, secret: string): Promise<any> {
-  const tk = c.req.query("tk");
-  if (!tk) return "no-tk";
-  if (!secret) return { ok: false, step: "no-secret" };
-  try {
-    const payload = await verifyJwt(tk, secret);
-    if (!payload?.id) return { ok: false, step: "verify-failed", payload };
-    const user = await (c.env as Bindings).DB.prepare(
-      'SELECT id, display_name, email, type FROM wl_Users WHERE id = ?',
-    ).bind(payload.id).first();
-    if (!user) return { ok: false, step: "user-not-found", id: payload.id };
-    if (user.type === "banned") return { ok: false, step: "banned", id: payload.id };
-    return { ok: true, step: "ok", id: payload.id, email: user.email, type: user.type };
-  } catch (e) {
-    return { ok: false, step: "exception", msg: String(e) };
-  }
-}
 
 // ---------- 4. 文章管理 API（需 Waline 管理员 JWT）----------
 app.use("/admin/api/*", auth);

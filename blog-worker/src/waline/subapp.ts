@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import type { Env, Variables } from "./env.js";
-import { auth, verifyJwt } from "./middleware/auth.js";
+import { auth } from "./middleware/auth.js";
 import { articleRoutes } from "./router/article.js";
 import { commentRoutes } from "./router/comment.js";
 import { dbRoutes } from "./router/db.js";
@@ -63,41 +63,6 @@ app.use("*", async (c, next) => {
 
 // Auth middleware - parse JWT on all routes (non-blocking, skips if no token)
 app.use("*", auth);
-
-// 诊断：返回 auth 中间件在此子应用内的处理结果（放在 auth 之后才有意义）
-app.get("/api/_probe", async (c) => {
-	const ui = c.get("userInfo") as any;
-	const header = c.req.header("Authorization") || "";
-	const tkQuery = c.req.query("token");
-	let manual: any = null;
-	try {
-		const token = header.startsWith("Bearer ") ? header.slice(7) : tkQuery || "";
-		if (token && c.env.JWT_SECRET) {
-			const payload = await verifyJwt(token, c.env.JWT_SECRET);
-			if (payload?.id) {
-				const u = await c.env.DB.prepare(
-					'SELECT id, display_name, email, type FROM wl_Users WHERE id = ?',
-				).bind(payload.id).first();
-				manual = { payload_id: payload.id, user: u ? { id: u.id, email: u.email, type: u.type } : null };
-			} else {
-				manual = { payload_id: null };
-			}
-		} else {
-			manual = { no_token_or_secret: !token, has_secret: !!c.env.JWT_SECRET };
-		}
-	} catch (e) {
-		manual = { exception: String(e) };
-	}
-	return c.json({
-		has_user_info: !!ui,
-		userInfo: ui ? { id: ui.objectId, email: ui.email, type: ui.type } : null,
-		has_secret: !!c.env.JWT_SECRET,
-		auth_header: header ? "present(" + header.length + ")" : "none",
-		query_token_present: !!tkQuery,
-		authDiag: c.get("authDiag"),
-		manual,
-	});
-});
 
 // Global error handler (catches malformed JSON bodies, etc.)
 app.onError((err, c) => {
