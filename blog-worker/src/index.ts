@@ -36,7 +36,7 @@ app.route("/waline", walineApp);
 
 // ---------- 3. 健康检查 ----------
 app.get("/api/health", (c) =>
-  json({ ok: true, worker: "blog-worker", waline: true }),
+  json({ ok: true, worker: "blog-worker", waline: true, ver: "auth-fix-2" }),
 );
 
 // ---------- 4. 文章管理 API（需 Waline 管理员 JWT）----------
