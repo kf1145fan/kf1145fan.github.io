@@ -368,6 +368,7 @@ document.addEventListener('DOMContentLoaded', ()=>{
   $('#postList').addEventListener('click', onListClick);
   $('#commentList').addEventListener('click', onCommentAction);
   $$('#commentFilter .wk-btn').forEach(b=>b.onclick=()=>setCommentFilter(b.dataset.f));
+  $$('.wk-tab').forEach(t=>t.onclick=()=>switchTab(t.dataset.tab));
   const saved = storage.get('WALINE_EMAIL');
   if(saved) $('#email').value = saved;
   tryAutoLogin().catch(()=>{});
