@@ -3,6 +3,7 @@ import type { Env, UserInfo, Variables } from "./waline/env.js";
 import walineApp from "./waline/subapp.js";
 import { auth } from "./waline/middleware/auth.js";
 import { renderAdminPage } from "./admin-ui.js";
+import { renderAdminLoginPage } from "./admin-login.js";
 
 // 整合后的完整 Bindings：博客文章(gh + D1 评论) + Waline(JWT/D1)
 type Bindings = Env & {
@@ -81,6 +82,9 @@ app.delete("/admin/api/post", async (c) => {
 });
 
 // ---------- 5. /admin 统一管理后台（Waline 风格 + Vditor）----------
+// 独立登录页：未登录跳转到 /admin/login；已登录访问 /admin 直接渲染后台，不做跳转
+app.get("/admin/login", (c) => c.html(renderAdminLoginPage(c.env.SITE_URL || "")));
+app.get("/admin/login/", (c) => c.html(renderAdminLoginPage(c.env.SITE_URL || "")));
 app.get("/admin", (c) => c.html(renderAdminPage(c.env.SITE_URL || "")));
 app.get("/admin/", (c) => c.html(renderAdminPage(c.env.SITE_URL || "")));
 
