@@ -38,6 +38,11 @@ a{color:var(--accent);text-decoration:none}
 .wk-tab{padding:8px 16px;font-size:13px;border:none;background:transparent;color:var(--muted);cursor:pointer;border-bottom:2px solid transparent}
 .wk-tab.active{color:var(--accent);border-bottom-color:var(--accent);font-weight:600}
 .wk-tab:hover{color:var(--fg)}
+/* 构建状态横幅 */
+.build-banner{margin:10px 0 0;padding:8px 12px;font-size:12px;border:1px solid var(--border);border-radius:3px;background:var(--hover)}
+.build-banner.ok{color:#1a7f37;background:#d1f5d3;border-color:transparent}
+.build-banner.err{color:var(--danger);background:rgba(220,38,38,.08);border-color:transparent}
+@media(prefers-color-scheme:dark){.build-banner.ok{color:#4ade80;background:rgba(74,222,128,.12)}}
 /* 内容容器 */
 .wk-wrap{max-width:1080px;margin:14px auto;padding:0 16px}
 /* 卡片（无大圆角） */
@@ -141,6 +146,7 @@ function switchTab(name){
   showPage(name);
   if(name==='manage') loadPosts();
   if(name==='comments') loadComments();
+  if(name==='files') loadFiles();
 }
 
 // ---------- 管理文章 ----------
@@ -180,8 +186,10 @@ async function openEdit(path){
   $('#date').value=(p.date||new Date().toISOString().slice(0,10)).slice(0,10);
   $('#tags').value=(p.tags||[]).join('，');
   $('#categories').value=(p.categories||[]).join('，');
+  $('#theme').value=p.theme||'';
   $('#editorTitle').textContent='编辑：'+(p.title||nameOf(p.path));
   $('#saveBtn').textContent='保存修改';
+  hideBuildBanner();
   pendingEditorValue=p.body||'';
   showPage('write');
   initEditorOnce();
@@ -190,9 +198,10 @@ async function openEdit(path){
 function nameOf(path){ return String(path||'').split('/').pop().replace(/\\.md$/,'')||'未命名'; }
 function newArticle(){
   editingPath='';
-  $('#title').value=''; $('#date').value=new Date().toISOString().slice(0,10); $('#tags').value=''; $('#categories').value='';
+  $('#title').value=''; $('#date').value=new Date().toISOString().slice(0,10); $('#tags').value=''; $('#categories').value=''; $('#theme').value='';
   $('#editorTitle').textContent='发布新文章';
   $('#saveBtn').textContent='发布文章';
+  hideBuildBanner();
   pendingEditorValue='';
   showPage('write');
   initEditorOnce();
@@ -206,6 +215,7 @@ async function savePost(){
   if(!title){ toast('请填写标题',true); return; }
   if(!content.trim()){ toast('请填写正文',true); return; }
   const body={ title, content,
+    theme:$('#theme').value.trim(),
     date:$('#date').value||new Date().toISOString().slice(0,10),
     tags:$('#tags').value.split(/[,，\\s]+/).map(s=>s.trim()).filter(Boolean),
     categories:$('#categories').value.split(/[,，\\s]+/).map(s=>s.trim()).filter(Boolean) };
@@ -217,6 +227,8 @@ async function savePost(){
   if(r.status===401){ redirectLogin(); return; }
   if(r.ok&&r.data&&r.data.ok){
     toast(isUpd?'保存成功，工作流将重建站点':'发布成功，工作流将重建站点');
+    showBuildBanner('已推送到 GitHub，部署工作流正在重建站点（约 40 秒），请稍候…');
+    pollBuild();
     switchTab('manage');
   } else toast('保存失败：'+(r.data&&r.data.error||r.status),true);
 }
@@ -333,6 +345,191 @@ async function onCommentAction(e){
   }
 }
 
+// ---------- 构建状态横幅 ----------
+let buildTimer=null;
+function showBuildBanner(msg, cls){
+  const b=$('#buildBanner'); if(!b) return;
+  b.className='build-banner '+(cls||'');
+  b.textContent=msg;
+  b.classList.remove('hidden');
+}
+function hideBuildBanner(){
+  const b=$('#buildBanner'); if(!b) return;
+  b.classList.add('hidden');
+}
+function pollBuild(){
+  if(buildTimer) clearInterval(buildTimer);
+  let tries=0;
+  buildTimer=setInterval(async ()=>{
+    tries++;
+    const r=await api(API_BASE+'/build');
+    const d=r.data||{};
+    if(!d.ok){
+      if(tries>=12){ clearInterval(buildTimer); buildTimer=null; showBuildBanner('暂时无法获取构建状态，请稍后刷新页面查看站点','err'); return; }
+      return;
+    }
+    if(d.running){
+      showBuildBanner('正在重建站点（工作流 '+esc(d.status)+'），已等待约 '+(tries*5)+' 秒…');
+      if(tries>=24){ clearInterval(buildTimer); buildTimer=null; showBuildBanner('重建仍在进行，稍后可刷新站点查看','err'); return; }
+      return;
+    }
+    clearInterval(buildTimer); buildTimer=null;
+    if(d.conclusion==='success'||d.conclusion==='completed'){
+      showBuildBanner('站点已更新完成，可以刷新首页查看','ok');
+    } else {
+      showBuildBanner('工作流结束（'+(d.conclusion||d.status||'未知')+'），可能未成功，请到 '+esc(d.html_url||'')+' 查看详情','err');
+    }
+  }, 5000);
+}
+
+// ---------- 写作辅助：主题 / 标题选项 ----------
+async function loadMeta(){
+  const r=await api(API_BASE+'/meta');
+  if(!r.ok) return;
+  const d=r.data||{};
+  const tl=$('#titleList'), th=$('#themeList');
+  if(tl){
+    tl.innerHTML='';
+    (d.titles||[]).forEach(t=>{
+      const o=document.createElement('option'); o.value=t; tl.appendChild(o);
+    });
+  }
+  if(th){
+    th.innerHTML='';
+    (d.themes||[]).forEach(t=>{
+      const o=document.createElement('option'); o.value=t; th.appendChild(o);
+    });
+  }
+}
+
+// ---------- 文件管理 ----------
+let filePath='';
+let fileEditPath='';
+function fmtSize(n){
+  n=n||0;
+  if(n<1024) return n+' B';
+  if(n<1024*1024) return (n/1024).toFixed(1)+' KB';
+  return (n/1024/1024).toFixed(1)+' MB';
+}
+function renderCrumb(){
+  const c=$('#fileCrumb'); if(!c) return;
+  const parts=filePath.split('/').filter(Boolean);
+  let html='<a href="javascript:;" data-dir="">根目录</a>';
+  let cur='';
+  parts.forEach((p,i)=>{
+    cur=cur?cur+'/'+p:p;
+    html+=' / <a href="javascript:;" data-dir="'+esc(cur)+'">'+esc(p)+'</a>';
+  });
+  c.innerHTML=html;
+  $$('#fileCrumb a').forEach(a=>a.onclick=()=>{ filePath=a.dataset.dir; loadFiles(); });
+}
+async function loadFiles(){
+  const list=$('#fileList'); if(!list) return;
+  list.innerHTML='<li class="empty">加载中...</li>';
+  const r=await api(API_BASE+'/files?path='+encodeURIComponent(filePath));
+  if(r.status===401){ redirectLogin(); return; }
+  if(!r.ok){ list.innerHTML='<li class="empty">加载失败：'+(r.data&&r.data.error||r.status)+'</li>'; return; }
+  const items=(r.data&&r.data.items)||[];
+  renderCrumb();
+  list.innerHTML='';
+  if(!items.length){ list.innerHTML='<li class="empty">空目录</li>'; return; }
+  items.forEach(f=>{
+    const li=document.createElement('li');
+    const isDir=f.type==='dir';
+    let ops='';
+    if(isDir){
+      ops+='<button class="wk-btn ghost sm" data-a="open">进入</button>'+
+           '<button class="wk-btn danger sm" data-a="del">删除</button>';
+    } else {
+      ops+='<button class="wk-btn ghost sm" data-a="edit">编辑</button>'+
+           '<button class="wk-btn ghost sm" data-a="dl">下载</button>'+
+           '<button class="wk-btn danger sm" data-a="del">删除</button>';
+    }
+    li.innerHTML='<div><div class="name">'+(isDir?'📁 ':'📄 ')+esc(f.name)+'</div><div class="meta">'+esc(f.path)+' · '+fmtSize(f.size)+'</div></div>'+
+      '<div class="ops">'+ops+'</div>';
+    li.dataset.type=f.type; li.dataset.path=f.path; li.dataset.name=f.name;
+    list.appendChild(li);
+  });
+}
+async function onFileClick(e){
+  const btn=e.target.closest('button'); if(!btn) return;
+  const li=btn.closest('li'); if(!li) return;
+  const path=li.dataset.path, name=li.dataset.name, a=btn.dataset.a;
+  if(a==='open'){ filePath=path; loadFiles(); return; }
+  if(a==='del'){
+    if(!confirm('确认删除「'+name+'」？目录会递归删除。')) return;
+    const r=await api(API_BASE+'/file?path='+encodeURIComponent(path),{method:'DELETE'});
+    if(r.status===401){ redirectLogin(); return; }
+    if(r.ok&&r.data&&r.data.ok) toast(r.data.message||'已删除');
+    else toast('删除失败：'+(r.data&&r.data.error||r.status),true);
+    loadFiles();
+    return;
+  }
+  if(a==='edit'){
+    const r=await api(API_BASE+'/file?path='+encodeURIComponent(path));
+    if(r.status===401){ redirectLogin(); return; }
+    if(!r.ok){ toast('读取失败：'+(r.data&&r.data.error||r.status),true); return; }
+    const d=r.data||{};
+    if(d.binary){ toast('二进制文件暂不支持在线编辑，请下载后修改再上传',true); return; }
+    fileEditPath=path;
+    $('#fileEditPath').textContent=path;
+    $('#fileEditArea').value=d.content||'';
+    $('#fileEditor').classList.remove('hidden');
+    window.scrollTo(0,0);
+    return;
+  }
+  if(a==='dl'){
+    const repo='__REPO__';
+    const url=repo?('https://raw.githubusercontent.com/'+repo+'/main/'+encodeURIComponent(path)):('#');
+    if(!repo){ toast('仓库未配置',true); return; }
+    window.open(url,'_blank');
+  }
+}
+async function saveFileEdit(){
+  const content=$('#fileEditArea').value;
+  const r=await api(API_BASE+'/file',{method:'PUT',body:JSON.stringify({path:fileEditPath,content})});
+  if(r.status===401){ redirectLogin(); return; }
+  if(r.ok&&r.data&&r.data.ok){
+    toast('已保存 '+fileEditPath);
+    $('#fileEditor').classList.add('hidden');
+    loadFiles();
+  } else toast('保存失败：'+(r.data&&r.data.error||r.status),true);
+}
+async function doUpload(files){
+  if(!files.length) return;
+  const fd=new FormData();
+  fd.append('path', filePath);
+  files.forEach(f=>fd.append('files', f));
+  const r=await fetch(API_BASE+'/upload',{method:'POST',body:fd,headers:{Authorization:'Bearer '+token}});
+  let d=null; try{ d=await r.json(); }catch(e){}
+  if(r.status===401){ redirectLogin(); return; }
+  if(d&&d.ok) toast(d.message||'上传成功');
+  else toast('上传失败：'+(d&&d.error||r.status),true);
+  loadFiles();
+}
+async function doUnzip(f){
+  if(!f) return;
+  const fd=new FormData();
+  fd.append('path', filePath);
+  fd.append('zip', f);
+  const r=await fetch(API_BASE+'/unzip',{method:'POST',body:fd,headers:{Authorization:'Bearer '+token}});
+  let d=null; try{ d=await r.json(); }catch(e){}
+  if(r.status===401){ redirectLogin(); return; }
+  if(d&&d.ok) toast(d.message||'解压完成');
+  else toast('解压失败：'+(d&&d.error||r.status),true);
+  loadFiles();
+}
+function newFolder(){
+  const name=prompt('输入文件夹名称：');
+  if(!name||!name.trim()) return;
+  const target=(filePath?filePath+'/':'')+name.trim();
+  const r=api(API_BASE+'/file',{method:'PUT',body:JSON.stringify({path:target+'/.gitkeep',content:''})});
+  r.then(res=>{
+    if(res.ok&&res.data&&res.data.ok){ toast('已创建 '+name.trim()); loadFiles(); }
+    else toast('创建失败',true);
+  });
+}
+
 // ---------- init ----------
 function redirectLogin(){ location.replace('/admin/login'); }
 document.addEventListener('DOMContentLoaded', ()=>{
@@ -356,11 +553,21 @@ document.addEventListener('DOMContentLoaded', ()=>{
   $('#postList').addEventListener('click',onListClick);
   $('#commentList').addEventListener('click',onCommentAction);
   $$('#commentFilter .wk-btn').forEach(b=>b.onclick=()=>setCommentFilter(b.dataset.f));
+  $('#fileList').addEventListener('click',onFileClick);
+  $('#fileEditSave').onclick=saveFileEdit;
+  $('#fileEditCancel').onclick=()=>$('#fileEditor').classList.add('hidden');
+  $('#upBtn').onclick=()=>$('#upInput').click();
+  $('#upInput').onchange=e=>{ doUpload(Array.from(e.target.files||[])); e.target.value=''; };
+  $('#zipBtn').onclick=()=>$('#zipInput').click();
+  $('#zipInput').onchange=e=>{ doUnzip(e.target.files&&e.target.files[0]); e.target.value=''; };
+  $('#newFolderBtn').onclick=newFolder;
+  loadMeta();
   $$('.wk-tab').forEach(t=>t.onclick=()=>switchTab(t.dataset.tab));
 });
 `;
 
-export function renderAdminPage(siteUrl: string): string {
+export function renderAdminPage(siteUrl: string, ghRepo?: string): string {
+  const repo = String(ghRepo || "");
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -387,6 +594,7 @@ export function renderAdminPage(siteUrl: string): string {
 <div class="wk-tabs">
   <button class="wk-tab active" data-tab="manage">管理文章</button>
   <button class="wk-tab" data-tab="comments">评论管理</button>
+  <button class="wk-tab" data-tab="files">文件管理</button>
 </div>
 
 <div class="wk-wrap">
@@ -412,15 +620,21 @@ export function renderAdminPage(siteUrl: string): string {
           <button class="wk-btn ghost sm" onclick="newArticle()">清空重写</button>
         </div>
       </div>
-      <label class="wk-label">标题</label>
-      <input class="wk-input" id="title" placeholder="文章标题">
+      <label class="wk-label">标题（可从下拉选择已有标题或自定义）</label>
+      <input class="wk-input" id="title" list="titleList" placeholder="文章标题">
+      <datalist id="titleList"></datalist>
       <div class="wk-row">
         <div class="wk-field"><label class="wk-label">日期</label><input class="wk-input" type="date" id="date"></div>
         <div class="wk-field"><label class="wk-label">分类</label><input class="wk-input" id="categories" placeholder="逗号或顿号分隔"></div>
         <div class="wk-field"><label class="wk-label">标签</label><input class="wk-input" id="tags" placeholder="逗号或顿号分隔"></div>
       </div>
+      <div class="wk-row">
+        <div class="wk-field"><label class="wk-label">主题（从已有主题中选择或自定义，可留空用站点默认）</label><input class="wk-input" id="theme" list="themeList" placeholder="如 indigo"></div>
+      </div>
+      <datalist id="themeList"></datalist>
       <label class="wk-label">正文（Markdown，分屏预览）</label>
       <div id="edt"></div>
+      <div id="buildBanner" class="build-banner hidden"></div>
       <div class="toolbar" style="justify-content:flex-end;margin-top:12px">
         <button class="wk-btn" id="saveBtn">发布文章</button>
       </div>
@@ -444,10 +658,39 @@ export function renderAdminPage(siteUrl: string): string {
     </div>
   </div>
 
+  <!-- 文件管理 -->
+  <div id="page-files" class="wk-page hidden">
+    <div class="wk-card">
+      <div class="toolbar" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">
+        <h3 class="wk-title" style="margin:0;border:none;padding:0">文件管理</h3>
+        <div class="filters" id="fileOps">
+          <button class="wk-btn sm" id="upBtn">上传</button>
+          <button class="wk-btn sm" id="zipBtn">解压 zip</button>
+          <button class="wk-btn ghost sm" id="newFolderBtn">新建文件夹</button>
+        </div>
+        <input type="file" id="upInput" multiple style="display:none">
+        <input type="file" id="zipInput" accept=".zip" style="display:none">
+      </div>
+      <div class="breadcrumb" id="fileCrumb" style="font-size:12px;color:var(--muted);padding:8px 6px 4px;word-break:break-all"></div>
+      <ul class="wk-list" id="fileList"><li class="empty">加载中...</li></ul>
+      <div id="fileEditor" class="hidden" style="margin-top:10px">
+        <div class="toolbar" style="justify-content:space-between;align-items:center">
+          <h3 class="wk-title" style="margin:0;border:none;padding:0" id="fileEditTitle">编辑文件</h3>
+          <div style="display:flex;gap:6px">
+            <button class="wk-btn ghost sm" id="fileEditCancel">取消</button>
+            <button class="wk-btn sm" id="fileEditSave">保存</button>
+          </div>
+        </div>
+        <label class="wk-label">路径：<span id="fileEditPath" style="color:var(--fg)"></span></label>
+        <textarea id="fileEditArea" style="width:100%;min-height:420px;font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;border:1px solid var(--border);border-radius:3px;padding:8px;background:var(--input-bg);color:var(--fg);outline:none"></textarea>
+      </div>
+    </div>
+  </div>
+
 </div>
 
 <script src="${VDIRTOR_JS}"></script>
-<script>${SCRIPT}</script>
+<script>${SCRIPT.replace(/__REPO__/g, repo)}</script>
 </body>
 </html>`;
 }

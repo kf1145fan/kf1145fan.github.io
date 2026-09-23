@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import type { Env, UserInfo, Variables } from "./waline/env.js";
 import walineApp from "./waline/subapp.js";
 import { auth } from "./waline/middleware/auth.js";
+import { unzipSync } from "fflate";
 import { renderAdminPage } from "./admin-ui.js";
 import { renderAdminLoginPage } from "./admin-login.js";
 
@@ -81,12 +82,60 @@ app.delete("/admin/api/post", async (c) => {
   return handleDeletePost(c.env as Bindings, path);
 });
 
+// 写作辅助：可用主题 + 已有文章标题（供选择/自定义）
+app.get("/admin/api/meta", async (c) => {
+  if (!isAdmin(c.get("userInfo"))) return json({ error: "unauthorized" }, 401);
+  return handleMeta(c.env as Bindings);
+});
+
+// 部署工作流状态：/admin/api/build
+app.get("/admin/api/build", async (c) => {
+  if (!isAdmin(c.get("userInfo"))) return json({ error: "unauthorized" }, 401);
+  return handleBuildStatus(c.env as Bindings);
+});
+
+// ---------- 文件管理（GitHub Contents API）----------
+app.get("/admin/api/files", async (c) => {
+  if (!isAdmin(c.get("userInfo"))) return json({ error: "unauthorized" }, 401);
+  const path = c.req.query("path") || "";
+  return handleListFiles(c.env as Bindings, path);
+});
+
+app.get("/admin/api/file", async (c) => {
+  if (!isAdmin(c.get("userInfo"))) return json({ error: "unauthorized" }, 401);
+  const path = c.req.query("path") || "";
+  if (!path) return json({ error: "path required" }, 400);
+  return handleGetFile(c.env as Bindings, path);
+});
+
+app.put("/admin/api/file", async (c) => {
+  if (!isAdmin(c.get("userInfo"))) return json({ error: "unauthorized" }, 401);
+  return handleSaveFile(c.env as Bindings, await c.req.json());
+});
+
+app.delete("/admin/api/file", async (c) => {
+  if (!isAdmin(c.get("userInfo"))) return json({ error: "unauthorized" }, 401);
+  const path = c.req.query("path") || "";
+  if (!path) return json({ error: "path required" }, 400);
+  return handleDeleteFile(c.env as Bindings, path);
+});
+
+app.post("/admin/api/upload", async (c) => {
+  if (!isAdmin(c.get("userInfo"))) return json({ error: "unauthorized" }, 401);
+  return handleUploadFile(c.env as Bindings, c.req.raw);
+});
+
+app.post("/admin/api/unzip", async (c) => {
+  if (!isAdmin(c.get("userInfo"))) return json({ error: "unauthorized" }, 401);
+  return handleUnzipFile(c.env as Bindings, c.req.raw);
+});
+
 // ---------- 5. /admin 统一管理后台（Waline 风格 + Vditor）----------
 // 独立登录页：未登录跳转到 /admin/login；已登录访问 /admin 直接渲染后台，不做跳转
 app.get("/admin/login", (c) => c.html(renderAdminLoginPage(c.env.SITE_URL || "")));
 app.get("/admin/login/", (c) => c.html(renderAdminLoginPage(c.env.SITE_URL || "")));
-app.get("/admin", (c) => c.html(renderAdminPage(c.env.SITE_URL || "")));
-app.get("/admin/", (c) => c.html(renderAdminPage(c.env.SITE_URL || "")));
+app.get("/admin", (c) => c.html(renderAdminPage(c.env.SITE_URL || "", c.env.GH_REPO || "")));
+app.get("/admin/", (c) => c.html(renderAdminPage(c.env.SITE_URL || "", c.env.GH_REPO || "")));
 
 // ---------- 6. 其余路径：反向代理 GitHub Pages 静态站点 ----------
 app.all("*", async (c) => {
@@ -188,6 +237,7 @@ async function handleWritePost(
 
   const title = String(body.title || "").trim();
   const content = String(body.content || "");
+  const theme = String(body.theme || "").trim();
   const tags = Array.isArray(body.tags) ? body.tags.map((x: any) => String(x)) : [];
   const categories = Array.isArray(body.categories)
     ? body.categories.map((x: any) => String(x))
@@ -207,6 +257,7 @@ async function handleWritePost(
 
   // front matter
   const fm: string[] = ["---", `title: '${title.replace(/'/g, "\\'")}'`, `date: ${date} 00:00:00`];
+  if (theme) fm.push(`theme: ${theme}`);
   if (categories.length) fm.push(`categories:\n  ${categories.map((x: any) => `- ${x}`).join("\n  ")}`);
   if (tags.length) fm.push(`tags:\n  ${tags.map((x: any) => `- ${x}`).join("\n  ")}`);
   fm.push("---", "");
@@ -260,11 +311,13 @@ async function handleDeletePost(env: Bindings, path: string): Promise<Response> 
 function parseFrontMatter(raw: string): {
   title: string;
   date: string;
+  theme: string;
   categories: string[];
   tags: string[];
   body: string;
 } {
   let title = "";
+  let theme = "";
   const categories: string[] = [];
   const tags: string[] = [];
   let date = "";
@@ -275,10 +328,12 @@ function parseFrontMatter(raw: string): {
     body = m[2];
     const is = fm.match(/^title:\s*['"]?(.*?)['"]?\s*$/m);
     const ds = fm.match(/^date:\s*(\d{4}-\d{2}-\d{2})/m);
+    const ts_ = fm.match(/^theme:\s*(.+)$/m);
     const cs = fm.match(/^categories:\s*([^\r\n]*)(?:\r?\n([\s\S]*?))?(?=\r?\n[a-zA-Z0-9_]+:|$)/im);
     const ts = fm.match(/^tags:\s*([^\r\n]*)(?:\r?\n([\s\S]*?))?(?=\r?\n[a-zA-Z0-9_]+:|$)/im);
     if (is) title = is[1].trim();
     if (ds) date = ds[1];
+    if (ts_) theme = ts_[1].trim();
     const parseList = (inline: string | undefined, multi: string | undefined): string[] => {
       const out: string[] = [];
       if (inline && inline.trim()) {
@@ -295,12 +350,273 @@ function parseFrontMatter(raw: string): {
     if (cs) categories.push(...parseList(cs[1], cs[2]));
     if (ts) tags.push(...parseList(ts[1], ts[2]));
   }
-  return { title, date, categories, tags, body: body.replace(/<!--\s*more\s*-->[\s\S]*$/, "").trimStart() };
+  return { title, date, theme, categories, tags, body: body.replace(/<!--\s*more\s*-->[\s\S]*$/, "").trimStart() };
 }
 
 function stripFrontMatter(content: string): string {
   const m = content.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?([\s\S]*)$/);
   return (m ? m[1] : content).trimStart();
+}
+
+// ---------- 写作辅助：主题 / 已有标题 ----------
+async function handleMeta(env: Bindings): Promise<Response> {
+  const { token, repo, postsDir, headers } = ghConfig(env);
+  if (!token) return json({ ok: false, error: "GH_TOKEN not configured" }, 500);
+  const themes: string[] = [];
+  const titles: string[] = [];
+  try {
+    // 读取 themes 目录下的主题文件夹
+    const tRes = await fetch(`https://api.github.com/repos/${repo}/contents/themes`, { headers });
+    if (tRes.ok) {
+      const arr = (await tRes.json()) as any[];
+      (arr || []).forEach((f) => { if (f.type === "dir") themes.push(f.name); });
+    }
+    // 读取已有文章标题（并取其 theme）
+    const pRes = await fetch(`https://api.github.com/repos/${repo}/contents/${postsDir}`, { headers });
+    if (pRes.ok) {
+      const arr = (await pRes.json()) as any[];
+      const files = (arr || []).filter((f: any) => f.name?.endsWith(".md")).slice(0, 50);
+      await Promise.all(files.map(async (f: any) => {
+        try {
+          const g = await fetch(`https://api.github.com/repos/${repo}/contents/${encodeURIComponent(f.path)}`, { headers });
+          if (!g.ok) return;
+          const d = (await g.json()) as any;
+          const raw = decodeURIComponent(escape(atob(d.content)));
+          const parsed = parseFrontMatter(raw);
+          if (parsed.title) titles.push(parsed.title);
+        } catch {}
+      }));
+    }
+  } catch {}
+  return json({ ok: true, themes, titles });
+}
+
+// ---------- 部署工作流状态 ----------
+async function handleBuildStatus(env: Bindings): Promise<Response> {
+  const { token, repo, headers } = ghConfig(env);
+  if (!token) return json({ ok: false, error: "GH_TOKEN not configured" }, 500);
+  try {
+    // 查询仓库最近一次 workflow run（deploy.yml 由 push 触发）
+    const res = await fetch(
+      `https://api.github.com/repos/${repo}/actions/runs?per_page=1`,
+      { headers },
+    );
+    if (!res.ok) return json({ ok: false, error: "github error " + res.status }, 502);
+    const data = (await res.json()) as any;
+    const run = ((data.workflow_runs || []) as any[])[0];
+    if (!run) return json({ ok: true, running: false, status: "none", conclusion: "none" });
+    const running = run.status === "in_progress" || run.status === "queued" || run.status === "pending" || run.status === "waiting";
+    return json({
+      ok: true,
+      running,
+      status: run.status,
+      conclusion: run.conclusion || "",
+      name: run.name || run.display_title || "",
+      started: run.created_at || "",
+      html_url: run.html_url || "",
+    });
+  } catch (e) {
+    return json({ ok: false, error: String(e) }, 500);
+  }
+}
+
+// ---------- 文件管理 ----------
+function ghPath(path: string): string {
+  return String(path || "").replace(/^\/+|\/+$/g, "").split("/").filter(Boolean).map(encodeURIComponent).join("/");
+}
+
+async function handleListFiles(env: Bindings, path: string): Promise<Response> {
+  const { token, repo, headers } = ghConfig(env);
+  if (!token) return json({ ok: false, error: "GH_TOKEN not configured" }, 500);
+  try {
+    const clean = String(path || "").replace(/^\/+|\/+$/g, "");
+    const url = clean
+      ? `https://api.github.com/repos/${repo}/contents/${ghPath(clean)}`
+      : `https://api.github.com/repos/${repo}/contents/`;
+    const res = await fetch(url, { headers });
+    if (!res.ok) {
+      if (res.status === 404) return json({ ok: false, error: "目录不存在" }, 404);
+      return json({ ok: false, error: "github error " + res.status }, 502);
+    }
+    const data = (await res.json()) as any[];
+    const items = (data || []).map((f: any) => ({
+      name: f.name,
+      path: f.path,
+      type: f.type,
+      size: f.size || 0,
+    }));
+    return json({ ok: true, path: clean, items });
+  } catch (e) {
+    return json({ ok: false, error: String(e) }, 500);
+  }
+}
+
+async function handleGetFile(env: Bindings, path: string): Promise<Response> {
+  const { token, repo, headers } = ghConfig(env);
+  if (!token) return json({ ok: false, error: "GH_TOKEN not configured" }, 500);
+  try {
+    const res = await fetch(`https://api.github.com/repos/${repo}/contents/${ghPath(path)}`, { headers });
+    if (!res.ok) return json({ ok: false, error: "github error " + res.status }, 502);
+    const d = (await res.json()) as any;
+    if (d.type !== "file") return json({ ok: false, error: "不是文件" }, 400);
+    // 二进制文件（图片等）仅返回元信息
+    const raw = decodeURIComponent(escape(atob(d.content)));
+    const isBinary = /[\x00-\x08\x0e-\x1f]/.test(raw.slice(0, 4096));
+    return json({
+      ok: true,
+      path: d.path,
+      sha: d.sha,
+      size: d.size,
+      content: isBinary ? "" : raw,
+      binary: isBinary,
+    });
+  } catch (e) {
+    return json({ ok: false, error: String(e) }, 500);
+  }
+}
+
+async function handleSaveFile(env: Bindings, body: any): Promise<Response> {
+  const { token, repo, branch, headers } = ghConfig(env);
+  if (!token) return json({ ok: false, error: "GH_TOKEN not configured" }, 500);
+  const path = String(body.path || "").trim();
+  const content = String(body.content ?? "");
+  if (!path) return json({ ok: false, error: "path required" }, 400);
+  try {
+    const rawApi = `https://api.github.com/repos/${repo}/contents/${ghPath(path)}`;
+    let sha: string | undefined;
+    const exist = await fetch(rawApi, { headers });
+    if (exist.ok) sha = ((await exist.json()) as any).sha;
+    const payload: any = {
+      message: `docs: update ${path}`,
+      content: btoa(unescape(encodeURIComponent(content))),
+      branch,
+    };
+    if (sha) payload.sha = sha;
+    const res = await fetch(rawApi, { method: "PUT", headers, body: JSON.stringify(payload) });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return json({ ok: false, error: "github error: " + ((data as any).message || res.status) }, 502);
+    return json({ ok: true, path, message: "已保存" });
+  } catch (e) {
+    return json({ ok: false, error: String(e) }, 500);
+  }
+}
+
+// 递归删除文件/目录（GitHub 目录需逐个删文件）
+async function deletePath(env: Bindings, path: string): Promise<Response> {
+  const { token, repo, branch, headers } = ghConfig(env);
+  if (!token) return json({ ok: false, error: "GH_TOKEN not configured" }, 500);
+  try {
+    const rawApi = `https://api.github.com/repos/${repo}/contents/${ghPath(path)}`;
+    const exist = await fetch(rawApi, { headers });
+    if (!exist.ok) return json({ ok: false, error: "未找到 " + path }, 404);
+    const data = (await exist.json()) as any;
+    if (Array.isArray(data)) {
+      for (const f of data as any[]) {
+        const r = await deletePath(env, f.path);
+        const rr = (await r.json()) as { ok?: boolean };
+        if (!rr.ok) return r;
+      }
+      return json({ ok: true, message: "已删除目录 " + path });
+    }
+    const res = await fetch(rawApi, {
+      method: "DELETE",
+      headers,
+      body: JSON.stringify({ sha: data.sha, message: `docs: delete ${path}`, branch }),
+    });
+    if (!res.ok) return json({ ok: false, error: "github error " + res.status }, 502);
+    return json({ ok: true, message: "已删除 " + path });
+  } catch (e) {
+    return json({ ok: false, error: String(e) }, 500);
+  }
+}
+
+async function handleDeleteFile(env: Bindings, path: string): Promise<Response> {
+  return deletePath(env, path);
+}
+
+// 上传文件（multipart：path=目标目录, files=多个文件）
+async function handleUploadFile(env: Bindings, req: Request): Promise<Response> {
+  const { token, repo, branch, headers } = ghConfig(env);
+  if (!token) return json({ ok: false, error: "GH_TOKEN not configured" }, 500);
+  try {
+    const form = await req.formData();
+    const dir = String((form.get("path") || "") as string).replace(/^\/+|\/+$/g, "");
+    const files = (form.getAll("files") as any[]).filter((f) => f && typeof f === "object") as File[];
+    if (!files.length) return json({ ok: false, error: "没有文件" }, 400);
+    const saved: string[] = [];
+    for (const f of files) {
+      const name = f.name.split("/").pop() || "";
+      const target = dir ? `${dir}/${name}` : name;
+      const buf = new Uint8Array(await f.arrayBuffer());
+      const content = bytesToBase64(buf);
+      const rawApi = `https://api.github.com/repos/${repo}/contents/${ghPath(target)}`;
+      let sha: string | undefined;
+      const exist = await fetch(rawApi, { headers });
+      if (exist.ok) sha = ((await exist.json()) as any).sha;
+      const payload: any = { message: `docs: upload ${target}`, content, branch };
+      if (sha) payload.sha = sha;
+      const res = await fetch(rawApi, { method: "PUT", headers, body: JSON.stringify(payload) });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        return json({ ok: false, error: `上传 ${name} 失败: ${(d as any).message || res.status}` }, 502);
+      }
+      saved.push(target);
+    }
+    return json({ ok: true, saved, message: `已上传 ${saved.length} 个文件` });
+  } catch (e) {
+    return json({ ok: false, error: String(e) }, 500);
+  }
+}
+
+// 解压 zip（multipart：path=目标目录, zip=zip 文件）
+async function handleUnzipFile(env: Bindings, req: Request): Promise<Response> {
+  const { token, repo, branch, headers } = ghConfig(env);
+  if (!token) return json({ ok: false, error: "GH_TOKEN not configured" }, 500);
+  try {
+    const form = await req.formData();
+    const dir = String((form.get("path") || "") as string).replace(/^\/+|\/+$/g, "");
+    const zipFile = form.get("zip") as File | null;
+    if (!zipFile) return json({ ok: false, error: "没有 zip 文件" }, 400);
+    const buf = new Uint8Array(await zipFile.arrayBuffer());
+    let entries: Record<string, Uint8Array>;
+    try {
+      entries = unzipSync(buf);
+    } catch {
+      return json({ ok: false, error: "zip 解析失败，请确认是有效的 zip 文件" }, 400);
+    }
+    const saved: string[] = [];
+    const failed: string[] = [];
+    const names = Object.keys(entries || {}).filter((n) => n && !n.endsWith("/"));
+    for (const name of names) {
+      const target = dir ? `${dir}/${name}` : name;
+      const rawApi = `https://api.github.com/repos/${repo}/contents/${ghPath(target)}`;
+      let sha: string | undefined;
+      const exist = await fetch(rawApi, { headers });
+      if (exist.ok) sha = ((await exist.json()) as any).sha;
+      const payload: any = { message: `docs: unzip ${target}`, content: bytesToBase64(entries[name]), branch };
+      if (sha) payload.sha = sha;
+      const res = await fetch(rawApi, { method: "PUT", headers, body: JSON.stringify(payload) });
+      if (!res.ok) { failed.push(name); continue; }
+      saved.push(target);
+    }
+    return json({
+      ok: true,
+      saved,
+      failed,
+      message: `解压完成：成功 ${saved.length} 个` + (failed.length ? `，失败 ${failed.length} 个（${failed.slice(0, 3).join("、")}）` : ""),
+    });
+  } catch (e) {
+    return json({ ok: false, error: String(e) }, 500);
+  }
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let bin = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    bin += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(bin);
 }
 
 export default app;
