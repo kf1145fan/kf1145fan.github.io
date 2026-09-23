@@ -244,7 +244,7 @@ function initEditorOnce(){
 function initEditor(){
   const opts={
     height: 540,
-    lang: 'zh-CN',
+    lang: 'zh_CN',
     mode: 'sv',                       // 分屏预览「复杂模式」（cp.802213.xyz）
     theme: window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'classic',
     icon: 'ant',
