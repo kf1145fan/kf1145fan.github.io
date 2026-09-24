@@ -206,10 +206,11 @@ async function handleListPosts(env: Bindings): Promise<Response> {
     const data = (await res.json()) as any[];
     const files = (data || []).filter((f) => f.name?.endsWith(".md"));
 
-    // 并行读取每篇 front matter，提取分类/标签
+    // 并行读取每篇 front matter，提取分类/标签/日期
     const posts = await Promise.all(files.map(async (f) => {
       let categories: string[] = [];
       let tags: string[] = [];
+      let date = "";
       try {
         const g = await fetch(`https://api.github.com/repos/${repo}/contents/${encodeURIComponent(f.path)}`, { headers });
         if (g.ok) {
@@ -218,12 +219,17 @@ async function handleListPosts(env: Bindings): Promise<Response> {
           const parsed = parseFrontMatter(raw);
           categories = parsed.categories || [];
           tags = parsed.tags || [];
+          date = parsed.date || "";
         }
       } catch {}
-      return { name: f.name, path: f.path, sha: f.sha, size: f.size, categories, tags };
+      // 日期回退：优先 front matter date，其次文件名内 YYYY-MM-DD 前缀，最后用名字兜底
+      const nameDate = String(f.name || "").match(/(\d{4}[-.]\d{2}[-.]\d{2})/);
+      const sortDate = date || (nameDate ? nameDate[1].replace(/\./g, "-") : "");
+      return { name: f.name, path: f.path, sha: f.sha, size: f.size, categories, tags, date: sortDate };
     }));
 
-    posts.sort((a, b) => String(b.name).localeCompare(String(a.name)));
+    // 按日期倒序（最新在前）
+    posts.sort((a, b) => (b.date || "").localeCompare(a.date || "") || String(b.name).localeCompare(String(a.name)));
 
     // 聚合历史分类/标签（供输入框下拉建议）
     const allCategories = [...new Set(posts.flatMap((p) => p.categories))];

@@ -177,7 +177,7 @@ async function loadPosts(){
   const r = await api(API_BASE+'/posts');
   if(r.status===401){ redirectLogin(); return; }
   if(!r.ok){ list.innerHTML = '<li class="empty">加载失败：'+(r.data&&r.data.error||r.status)+'</li>'; return; }
-  const posts = (r.data.posts||[]).slice().sort((a,b)=>String(b.name||'').localeCompare(String(a.name||'')));
+  const posts = (r.data.posts||[]).slice().sort((a,b)=> (b.date||'').localeCompare(a.date||'') || String(b.name||'').localeCompare(String(a.name||'')));
   if(!posts.length){ list.innerHTML='<li class="empty">还没有文章，点右上角「＋ 添加新文章」开始写作</li>'; return; }
   wireTaxonomySuggest(r.data);
   list.innerHTML='';
@@ -637,13 +637,13 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string): string {
 
   <!-- 管理文章（默认首页） -->
   <div id="page-manage" class="wk-page">
+    <div id="buildBanner" class="build-banner hidden" style="margin-bottom:0"></div>
     <div class="wk-card">
       <div class="toolbar" style="justify-content:space-between;align-items:center">
         <h3 class="wk-title" style="margin:0;border:none;padding:0">已有文章</h3>
         <button class="wk-btn sm" id="newBtn">＋ 添加新文章</button>
       </div>
       <ul class="wk-list" id="postList"><li class="empty">加载中...</li></ul>
-      <div id="buildBanner" class="build-banner hidden"></div>
     </div>
   </div>
 
