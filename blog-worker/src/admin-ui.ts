@@ -404,12 +404,24 @@ async function loadMeta(){
 
 // ---------- 文件管理 ----------
 let filePath='';
-let fileEditPath='';
+let fileBranch='';
+let branchesLoaded=false;
+function curBranch(){ return fileBranch || 'main'; }
+function fileApi(url){
+  const sep=url.indexOf('?')>=0?'&':'?';
+  return url+sep+'branch='+encodeURIComponent(curBranch());
+}
 function fmtSize(n){
   n=n||0;
   if(n<1024) return n+' B';
   if(n<1024*1024) return (n/1024).toFixed(1)+' KB';
   return (n/1024/1024).toFixed(1)+' MB';
+}
+function upLevel(){
+  const parts=filePath.split('/').filter(Boolean);
+  parts.pop();
+  filePath=parts.join('/');
+  loadFiles();
 }
 function renderCrumb(){
   const c=$('#fileCrumb'); if(!c) return;
@@ -423,10 +435,24 @@ function renderCrumb(){
   c.innerHTML=html;
   $$('#fileCrumb a').forEach(a=>a.onclick=()=>{ filePath=a.dataset.dir; loadFiles(); });
 }
+async function loadBranches(selectCur){
+  const sel=$('#branchSel'); if(!sel) return;
+  const r=await api(API_BASE+'/branches');
+  if(!r.ok||!r.data){ return; }
+  const branches=r.data.branches||[];
+  if(selectCur) fileBranch=r.data.current||'main';
+  sel.innerHTML='';
+  branches.forEach(b=>{
+    const o=document.createElement('option'); o.value=b; o.textContent=b; sel.appendChild(o);
+  });
+  sel.value=fileBranch||(r.data.current||'main');
+  if(!fileBranch||!sel.value) fileBranch=sel.value||'main';
+  branchesLoaded=true;
+}
 async function loadFiles(){
   const list=$('#fileList'); if(!list) return;
   list.innerHTML='<li class="empty">加载中...</li>';
-  const r=await api(API_BASE+'/files?path='+encodeURIComponent(filePath));
+  const r=await api(fileApi(API_BASE+'/files?path='+encodeURIComponent(filePath)));
   if(r.status===401){ redirectLogin(); return; }
   if(!r.ok){ list.innerHTML='<li class="empty">加载失败：'+(r.data&&r.data.error||r.status)+'</li>'; return; }
   const items=(r.data&&r.data.items)||[];
@@ -436,17 +462,20 @@ async function loadFiles(){
   items.forEach(f=>{
     const li=document.createElement('li');
     const isDir=f.type==='dir';
-    let ops='';
+    const isZip=/\.zip$/i.test(f.name||'');
+    li.style.cursor=isDir?'pointer':'default';
+    // 文件夹：整行点击进入
     if(isDir){
-      ops+='<button class="wk-btn ghost sm" data-a="open">进入</button>'+
-           '<button class="wk-btn danger sm" data-a="del">删除</button>';
+      li.innerHTML='<div class="name">📁 '+esc(f.name)+'</div>'+
+        '<div class="ops"><button class="wk-btn danger sm" data-a="del">删除</button></div>';
     } else {
-      ops+='<button class="wk-btn ghost sm" data-a="edit">编辑</button>'+
-           '<button class="wk-btn ghost sm" data-a="dl">下载</button>'+
-           '<button class="wk-btn danger sm" data-a="del">删除</button>';
+      let ops='<button class="wk-btn ghost sm" data-a="edit">编辑</button>'+
+              '<button class="wk-btn ghost sm" data-a="dl">下载</button>'+
+              '<button class="wk-btn danger sm" data-a="del">删除</button>';
+      if(isZip) ops='<button class="wk-btn act sm" data-a="zip">解压</button>'+ops;
+      li.innerHTML='<div class="name">📄 '+esc(f.name)+' · '+fmtSize(f.size)+'</div>'+
+        '<div class="ops">'+ops+'</div>';
     }
-    li.innerHTML='<div><div class="name">'+(isDir?'📁 ':'📄 ')+esc(f.name)+'</div><div class="meta">'+esc(f.path)+' · '+fmtSize(f.size)+'</div></div>'+
-      '<div class="ops">'+ops+'</div>';
     li.dataset.type=f.type; li.dataset.path=f.path; li.dataset.name=f.name;
     list.appendChild(li);
   });
@@ -455,10 +484,18 @@ async function onFileClick(e){
   const btn=e.target.closest('button'); if(!btn) return;
   const li=btn.closest('li'); if(!li) return;
   const path=li.dataset.path, name=li.dataset.name, a=btn.dataset.a;
-  if(a==='open'){ filePath=path; loadFiles(); return; }
+  if(a==='zip'){
+    if(!confirm('解压「'+name+'」到当前目录？')) return;
+    const r=await api(API_BASE+'/unzip-path',{method:'POST',body:JSON.stringify({path,branch:curBranch()})});
+    if(r.status===401){ redirectLogin(); return; }
+    if(r.ok&&r.data&&r.data.ok) toast(r.data.message||'解压完成');
+    else toast('解压失败：'+(r.data&&r.data.error||r.status),true);
+    loadFiles();
+    return;
+  }
   if(a==='del'){
     if(!confirm('确认删除「'+name+'」？目录会递归删除。')) return;
-    const r=await api(API_BASE+'/file?path='+encodeURIComponent(path),{method:'DELETE'});
+    const r=await api(fileApi(API_BASE+'/file?path='+encodeURIComponent(path)),{method:'DELETE'});
     if(r.status===401){ redirectLogin(); return; }
     if(r.ok&&r.data&&r.data.ok) toast(r.data.message||'已删除');
     else toast('删除失败：'+(r.data&&r.data.error||r.status),true);
@@ -466,7 +503,7 @@ async function onFileClick(e){
     return;
   }
   if(a==='edit'){
-    const r=await api(API_BASE+'/file?path='+encodeURIComponent(path));
+    const r=await api(fileApi(API_BASE+'/file?path='+encodeURIComponent(path)));
     if(r.status===401){ redirectLogin(); return; }
     if(!r.ok){ toast('读取失败：'+(r.data&&r.data.error||r.status),true); return; }
     const d=r.data||{};
@@ -475,19 +512,25 @@ async function onFileClick(e){
     $('#fileEditPath').textContent=path;
     $('#fileEditArea').value=d.content||'';
     $('#fileEditor').classList.remove('hidden');
-    window.scrollTo(0,0);
     return;
   }
   if(a==='dl'){
     const repo='__REPO__';
-    const url=repo?('https://raw.githubusercontent.com/'+repo+'/main/'+encodeURIComponent(path)):('#');
+    const url=repo?('https://raw.githubusercontent.com/'+repo+'/'+curBranch()+'/'+encodeURIComponent(path)):('#');
     if(!repo){ toast('仓库未配置',true); return; }
     window.open(url,'_blank');
   }
 }
+async function onFileListClick(e){
+  // 文件夹整行点击进入
+  const li=e.target.closest('li'); if(!li||li.dataset.type!=='dir') return;
+  if(e.target.closest('button')) return; // 点击按钮时交给 onFileClick
+  filePath=li.dataset.path;
+  loadFiles();
+}
 async function saveFileEdit(){
   const content=$('#fileEditArea').value;
-  const r=await api(API_BASE+'/file',{method:'PUT',body:JSON.stringify({path:fileEditPath,content})});
+  const r=await api(API_BASE+'/file',{method:'PUT',body:JSON.stringify({path:fileEditPath,content,branch:curBranch()})});
   if(r.status===401){ redirectLogin(); return; }
   if(r.ok&&r.data&&r.data.ok){
     toast('已保存 '+fileEditPath);
@@ -499,6 +542,7 @@ async function doUpload(files){
   if(!files.length) return;
   const fd=new FormData();
   fd.append('path', filePath);
+  fd.append('branch', curBranch());
   files.forEach(f=>fd.append('files', f));
   const r=await fetch(API_BASE+'/upload',{method:'POST',body:fd,headers:{Authorization:'Bearer '+token}});
   let d=null; try{ d=await r.json(); }catch(e){}
@@ -507,23 +551,11 @@ async function doUpload(files){
   else toast('上传失败：'+(d&&d.error||r.status),true);
   loadFiles();
 }
-async function doUnzip(f){
-  if(!f) return;
-  const fd=new FormData();
-  fd.append('path', filePath);
-  fd.append('zip', f);
-  const r=await fetch(API_BASE+'/unzip',{method:'POST',body:fd,headers:{Authorization:'Bearer '+token}});
-  let d=null; try{ d=await r.json(); }catch(e){}
-  if(r.status===401){ redirectLogin(); return; }
-  if(d&&d.ok) toast(d.message||'解压完成');
-  else toast('解压失败：'+(d&&d.error||r.status),true);
-  loadFiles();
-}
 function newFolder(){
   const name=prompt('输入文件夹名称：');
   if(!name||!name.trim()) return;
   const target=(filePath?filePath+'/':'')+name.trim();
-  const r=api(API_BASE+'/file',{method:'PUT',body:JSON.stringify({path:target+'/.gitkeep',content:''})});
+  const r=api(fileApi(API_BASE+'/file'),{method:'PUT',body:JSON.stringify({path:target+'/.gitkeep',content:'',branch:curBranch()})});
   r.then(res=>{
     if(res.ok&&res.data&&res.data.ok){ toast('已创建 '+name.trim()); loadFiles(); }
     else toast('创建失败',true);
@@ -554,13 +586,15 @@ document.addEventListener('DOMContentLoaded', ()=>{
   $('#commentList').addEventListener('click',onCommentAction);
   $$('#commentFilter .wk-btn').forEach(b=>b.onclick=()=>setCommentFilter(b.dataset.f));
   $('#fileList').addEventListener('click',onFileClick);
+  $('#fileList').addEventListener('click',onFileListClick);
   $('#fileEditSave').onclick=saveFileEdit;
-  $('#fileEditCancel').onclick=()=>$('#fileEditor').classList.add('hidden');
+  $('#fileEditBack').onclick=()=>$('#fileEditor').classList.add('hidden');
   $('#upBtn').onclick=()=>$('#upInput').click();
   $('#upInput').onchange=e=>{ doUpload(Array.from(e.target.files||[])); e.target.value=''; };
-  $('#zipBtn').onclick=()=>$('#zipInput').click();
-  $('#zipInput').onchange=e=>{ doUnzip(e.target.files&&e.target.files[0]); e.target.value=''; };
+  $('#upDirBtn').onclick=upLevel;
+  $('#branchSel').onchange=e=>{ fileBranch=e.target.value||'main'; filePath=''; loadFiles(); };
   $('#newFolderBtn').onclick=newFolder;
+  loadBranches(true);
   loadMeta();
   $$('.wk-tab').forEach(t=>t.onclick=()=>switchTab(t.dataset.tab));
 });
@@ -662,28 +696,33 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string): string {
   <div id="page-files" class="wk-page hidden">
     <div class="wk-card">
       <div class="toolbar" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">
-        <h3 class="wk-title" style="margin:0;border:none;padding:0">文件管理</h3>
+        <div style="display:flex;align-items:center;gap:10px">
+          <h3 class="wk-title" style="margin:0;border:none;padding:0">文件管理</h3>
+          <select class="wk-input" id="branchSel" style="width:auto;min-width:120px;padding:4px 8px" title="切换分支">
+            <option value="">加载分支...</option>
+          </select>
+        </div>
         <div class="filters" id="fileOps">
+          <button class="wk-btn ghost sm" id="upDirBtn" title="返回上一级">← 上一级</button>
           <button class="wk-btn sm" id="upBtn">上传</button>
-          <button class="wk-btn sm" id="zipBtn">解压 zip</button>
           <button class="wk-btn ghost sm" id="newFolderBtn">新建文件夹</button>
         </div>
         <input type="file" id="upInput" multiple style="display:none">
-        <input type="file" id="zipInput" accept=".zip" style="display:none">
       </div>
       <div class="breadcrumb" id="fileCrumb" style="font-size:12px;color:var(--muted);padding:8px 6px 4px;word-break:break-all"></div>
       <ul class="wk-list" id="fileList"><li class="empty">加载中...</li></ul>
-      <div id="fileEditor" class="hidden" style="margin-top:10px">
-        <div class="toolbar" style="justify-content:space-between;align-items:center">
-          <h3 class="wk-title" style="margin:0;border:none;padding:0" id="fileEditTitle">编辑文件</h3>
-          <div style="display:flex;gap:6px">
-            <button class="wk-btn ghost sm" id="fileEditCancel">取消</button>
-            <button class="wk-btn sm" id="fileEditSave">保存</button>
-          </div>
+    </div>
+    <!-- 全屏文本编辑器 -->
+    <div id="fileEditor" class="hidden" style="position:fixed;inset:0;background:var(--bg);z-index:100;display:flex;flex-direction:column">
+      <div class="wk-nav" style="position:static;height:46px">
+        <div class="inner">
+          <button class="logout" id="fileEditBack" style="color:var(--nav-fg);border:1px solid var(--border);background:transparent;padding:3px 10px;border-radius:3px;cursor:pointer">← 返回</button>
+          <span class="brand" style="font-size:12px;color:var(--nav-fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" id="fileEditPath"></span>
+          <div class="spacer"></div>
+          <button class="logout" id="fileEditSave" style="color:#fff;background:var(--accent);border:none;padding:4px 14px;border-radius:3px;cursor:pointer">保存</button>
         </div>
-        <label class="wk-label">路径：<span id="fileEditPath" style="color:var(--fg)"></span></label>
-        <textarea id="fileEditArea" style="width:100%;min-height:420px;font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;border:1px solid var(--border);border-radius:3px;padding:8px;background:var(--input-bg);color:var(--fg);outline:none"></textarea>
       </div>
+      <textarea id="fileEditArea" style="flex:1;width:100%;font:13px/1.6 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;border:none;border-radius:0;padding:14px;background:var(--input-bg);color:var(--fg);outline:none;resize:none"></textarea>
     </div>
   </div>
 

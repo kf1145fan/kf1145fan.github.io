@@ -95,17 +95,24 @@ app.get("/admin/api/build", async (c) => {
 });
 
 // ---------- 文件管理（GitHub Contents API）----------
+app.get("/admin/api/branches", async (c) => {
+  if (!isAdmin(c.get("userInfo"))) return json({ error: "unauthorized" }, 401);
+  return handleListBranches(c.env as Bindings);
+});
+
 app.get("/admin/api/files", async (c) => {
   if (!isAdmin(c.get("userInfo"))) return json({ error: "unauthorized" }, 401);
   const path = c.req.query("path") || "";
-  return handleListFiles(c.env as Bindings, path);
+  const branch = c.req.query("branch") || "";
+  return handleListFiles(c.env as Bindings, path, branch || undefined);
 });
 
 app.get("/admin/api/file", async (c) => {
   if (!isAdmin(c.get("userInfo"))) return json({ error: "unauthorized" }, 401);
   const path = c.req.query("path") || "";
   if (!path) return json({ error: "path required" }, 400);
-  return handleGetFile(c.env as Bindings, path);
+  const branch = c.req.query("branch") || "";
+  return handleGetFile(c.env as Bindings, path, branch || undefined);
 });
 
 app.put("/admin/api/file", async (c) => {
@@ -117,7 +124,8 @@ app.delete("/admin/api/file", async (c) => {
   if (!isAdmin(c.get("userInfo"))) return json({ error: "unauthorized" }, 401);
   const path = c.req.query("path") || "";
   if (!path) return json({ error: "path required" }, 400);
-  return handleDeleteFile(c.env as Bindings, path);
+  const branch = c.req.query("branch") || "";
+  return handleDeleteFile(c.env as Bindings, path, branch || undefined);
 });
 
 app.post("/admin/api/upload", async (c) => {
@@ -128,6 +136,11 @@ app.post("/admin/api/upload", async (c) => {
 app.post("/admin/api/unzip", async (c) => {
   if (!isAdmin(c.get("userInfo"))) return json({ error: "unauthorized" }, 401);
   return handleUnzipFile(c.env as Bindings, c.req.raw);
+});
+
+app.post("/admin/api/unzip-path", async (c) => {
+  if (!isAdmin(c.get("userInfo"))) return json({ error: "unauthorized" }, 401);
+  return handleUnzipByPath(c.env as Bindings, await c.req.json());
 });
 
 // ---------- 5. /admin 统一管理后台（Waline 风格 + Vditor）----------
@@ -425,14 +438,30 @@ function ghPath(path: string): string {
   return String(path || "").replace(/^\/+|\/+$/g, "").split("/").filter(Boolean).map(encodeURIComponent).join("/");
 }
 
-async function handleListFiles(env: Bindings, path: string): Promise<Response> {
+async function handleListBranches(env: Bindings): Promise<Response> {
   const { token, repo, headers } = ghConfig(env);
+  if (!token) return json({ ok: false, error: "GH_TOKEN not configured" }, 500);
+  try {
+    const res = await fetch(`https://api.github.com/repos/${repo}/branches?per_page=100`, { headers });
+    if (!res.ok) return json({ ok: false, error: "github error " + res.status }, 502);
+    const data = (await res.json()) as any[];
+    const branches = (data || []).map((b: any) => b.name).filter(Boolean);
+    const current = ghConfig(env).branch;
+    return json({ ok: true, branches, current });
+  } catch (e) {
+    return json({ ok: false, error: String(e) }, 500);
+  }
+}
+
+async function handleListFiles(env: Bindings, path: string, branch?: string): Promise<Response> {
+  const { token, repo, headers } = ghConfig(env);
+  const useBranch = branch || ghConfig(env).branch;
   if (!token) return json({ ok: false, error: "GH_TOKEN not configured" }, 500);
   try {
     const clean = String(path || "").replace(/^\/+|\/+$/g, "");
     const url = clean
-      ? `https://api.github.com/repos/${repo}/contents/${ghPath(clean)}`
-      : `https://api.github.com/repos/${repo}/contents/`;
+      ? `https://api.github.com/repos/${repo}/contents/${ghPath(clean)}?ref=${encodeURIComponent(useBranch)}`
+      : `https://api.github.com/repos/${repo}/contents/?ref=${encodeURIComponent(useBranch)}`;
     const res = await fetch(url, { headers });
     if (!res.ok) {
       if (res.status === 404) return json({ ok: false, error: "目录不存在" }, 404);
@@ -445,17 +474,18 @@ async function handleListFiles(env: Bindings, path: string): Promise<Response> {
       type: f.type,
       size: f.size || 0,
     }));
-    return json({ ok: true, path: clean, items });
+    return json({ ok: true, path: clean, branch: useBranch, items });
   } catch (e) {
     return json({ ok: false, error: String(e) }, 500);
   }
 }
 
-async function handleGetFile(env: Bindings, path: string): Promise<Response> {
+async function handleGetFile(env: Bindings, path: string, branch?: string): Promise<Response> {
   const { token, repo, headers } = ghConfig(env);
+  const useBranch = branch || ghConfig(env).branch;
   if (!token) return json({ ok: false, error: "GH_TOKEN not configured" }, 500);
   try {
-    const res = await fetch(`https://api.github.com/repos/${repo}/contents/${ghPath(path)}`, { headers });
+    const res = await fetch(`https://api.github.com/repos/${repo}/contents/${ghPath(path)}?ref=${encodeURIComponent(useBranch)}`, { headers });
     if (!res.ok) return json({ ok: false, error: "github error " + res.status }, 502);
     const d = (await res.json()) as any;
     if (d.type !== "file") return json({ ok: false, error: "不是文件" }, 400);
@@ -476,7 +506,8 @@ async function handleGetFile(env: Bindings, path: string): Promise<Response> {
 }
 
 async function handleSaveFile(env: Bindings, body: any): Promise<Response> {
-  const { token, repo, branch, headers } = ghConfig(env);
+  const { token, repo, headers } = ghConfig(env);
+  const useBranch = String(body.branch || "").trim() || ghConfig(env).branch;
   if (!token) return json({ ok: false, error: "GH_TOKEN not configured" }, 500);
   const path = String(body.path || "").trim();
   const content = String(body.content ?? "");
@@ -484,35 +515,36 @@ async function handleSaveFile(env: Bindings, body: any): Promise<Response> {
   try {
     const rawApi = `https://api.github.com/repos/${repo}/contents/${ghPath(path)}`;
     let sha: string | undefined;
-    const exist = await fetch(rawApi, { headers });
+    const exist = await fetch(`${rawApi}?ref=${encodeURIComponent(useBranch)}`, { headers });
     if (exist.ok) sha = ((await exist.json()) as any).sha;
     const payload: any = {
       message: `docs: update ${path}`,
       content: btoa(unescape(encodeURIComponent(content))),
-      branch,
+      branch: useBranch,
     };
     if (sha) payload.sha = sha;
     const res = await fetch(rawApi, { method: "PUT", headers, body: JSON.stringify(payload) });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) return json({ ok: false, error: "github error: " + ((data as any).message || res.status) }, 502);
-    return json({ ok: true, path, message: "已保存" });
+    return json({ ok: true, path, branch: useBranch, message: "已保存" });
   } catch (e) {
     return json({ ok: false, error: String(e) }, 500);
   }
 }
 
 // 递归删除文件/目录（GitHub 目录需逐个删文件）
-async function deletePath(env: Bindings, path: string): Promise<Response> {
-  const { token, repo, branch, headers } = ghConfig(env);
+async function deletePath(env: Bindings, path: string, branch?: string): Promise<Response> {
+  const { token, repo, headers } = ghConfig(env);
+  const useBranch = branch || ghConfig(env).branch;
   if (!token) return json({ ok: false, error: "GH_TOKEN not configured" }, 500);
   try {
     const rawApi = `https://api.github.com/repos/${repo}/contents/${ghPath(path)}`;
-    const exist = await fetch(rawApi, { headers });
+    const exist = await fetch(`${rawApi}?ref=${encodeURIComponent(useBranch)}`, { headers });
     if (!exist.ok) return json({ ok: false, error: "未找到 " + path }, 404);
     const data = (await exist.json()) as any;
     if (Array.isArray(data)) {
       for (const f of data as any[]) {
-        const r = await deletePath(env, f.path);
+        const r = await deletePath(env, f.path, useBranch);
         const rr = (await r.json()) as { ok?: boolean };
         if (!rr.ok) return r;
       }
@@ -521,7 +553,7 @@ async function deletePath(env: Bindings, path: string): Promise<Response> {
     const res = await fetch(rawApi, {
       method: "DELETE",
       headers,
-      body: JSON.stringify({ sha: data.sha, message: `docs: delete ${path}`, branch }),
+      body: JSON.stringify({ sha: data.sha, message: `docs: delete ${path}`, branch: useBranch }),
     });
     if (!res.ok) return json({ ok: false, error: "github error " + res.status }, 502);
     return json({ ok: true, message: "已删除 " + path });
@@ -530,17 +562,18 @@ async function deletePath(env: Bindings, path: string): Promise<Response> {
   }
 }
 
-async function handleDeleteFile(env: Bindings, path: string): Promise<Response> {
-  return deletePath(env, path);
+async function handleDeleteFile(env: Bindings, path: string, branch?: string): Promise<Response> {
+  return deletePath(env, path, branch);
 }
 
-// 上传文件（multipart：path=目标目录, files=多个文件）
+// 上传文件（multipart：path=目标目录, branch=分支, files=多个文件）
 async function handleUploadFile(env: Bindings, req: Request): Promise<Response> {
-  const { token, repo, branch, headers } = ghConfig(env);
+  const { token, repo, headers } = ghConfig(env);
   if (!token) return json({ ok: false, error: "GH_TOKEN not configured" }, 500);
   try {
     const form = await req.formData();
     const dir = String((form.get("path") || "") as string).replace(/^\/+|\/+$/g, "");
+    const useBranch = String((form.get("branch") || "") as string).trim() || ghConfig(env).branch;
     const files = (form.getAll("files") as any[]).filter((f) => f && typeof f === "object") as File[];
     if (!files.length) return json({ ok: false, error: "没有文件" }, 400);
     const saved: string[] = [];
@@ -551,9 +584,9 @@ async function handleUploadFile(env: Bindings, req: Request): Promise<Response> 
       const content = bytesToBase64(buf);
       const rawApi = `https://api.github.com/repos/${repo}/contents/${ghPath(target)}`;
       let sha: string | undefined;
-      const exist = await fetch(rawApi, { headers });
+      const exist = await fetch(`${rawApi}?ref=${encodeURIComponent(useBranch)}`, { headers });
       if (exist.ok) sha = ((await exist.json()) as any).sha;
-      const payload: any = { message: `docs: upload ${target}`, content, branch };
+      const payload: any = { message: `docs: upload ${target}`, content, branch: useBranch };
       if (sha) payload.sha = sha;
       const res = await fetch(rawApi, { method: "PUT", headers, body: JSON.stringify(payload) });
       if (!res.ok) {
@@ -568,13 +601,14 @@ async function handleUploadFile(env: Bindings, req: Request): Promise<Response> 
   }
 }
 
-// 解压 zip（multipart：path=目标目录, zip=zip 文件）
+// 解压 zip（multipart：path=目标目录, branch=分支, zip=zip 文件）
 async function handleUnzipFile(env: Bindings, req: Request): Promise<Response> {
-  const { token, repo, branch, headers } = ghConfig(env);
+  const { token, repo, headers } = ghConfig(env);
   if (!token) return json({ ok: false, error: "GH_TOKEN not configured" }, 500);
   try {
     const form = await req.formData();
     const dir = String((form.get("path") || "") as string).replace(/^\/+|\/+$/g, "");
+    const useBranch = String((form.get("branch") || "") as string).trim() || ghConfig(env).branch;
     const zipFile = form.get("zip") as File | null;
     if (!zipFile) return json({ ok: false, error: "没有 zip 文件" }, 400);
     const buf = new Uint8Array(await zipFile.arrayBuffer());
@@ -591,9 +625,61 @@ async function handleUnzipFile(env: Bindings, req: Request): Promise<Response> {
       const target = dir ? `${dir}/${name}` : name;
       const rawApi = `https://api.github.com/repos/${repo}/contents/${ghPath(target)}`;
       let sha: string | undefined;
-      const exist = await fetch(rawApi, { headers });
+      const exist = await fetch(`${rawApi}?ref=${encodeURIComponent(useBranch)}`, { headers });
       if (exist.ok) sha = ((await exist.json()) as any).sha;
-      const payload: any = { message: `docs: unzip ${target}`, content: bytesToBase64(entries[name]), branch };
+      const payload: any = { message: `docs: unzip ${target}`, content: bytesToBase64(entries[name]), branch: useBranch };
+      if (sha) payload.sha = sha;
+      const res = await fetch(rawApi, { method: "PUT", headers, body: JSON.stringify(payload) });
+      if (!res.ok) { failed.push(name); continue; }
+      saved.push(target);
+    }
+    return json({
+      ok: true,
+      saved,
+      failed,
+      message: `解压完成：成功 ${saved.length} 个` + (failed.length ? `，失败 ${failed.length} 个（${failed.slice(0, 3).join("、")}）` : ""),
+    });
+  } catch (e) {
+    return json({ ok: false, error: String(e) }, 500);
+  }
+}
+
+// 解压仓库内的已在目录里的 zip 文件到当前目录（不要求再上传）
+async function handleUnzipByPath(env: Bindings, body: any): Promise<Response> {
+  const { token, repo, headers } = ghConfig(env);
+  const useBranch = String(body.branch || "").trim() || ghConfig(env).branch;
+  const zipPath = String(body.path || "").trim();
+  if (!token) return json({ ok: false, error: "GH_TOKEN not configured" }, 500);
+  if (!zipPath) return json({ ok: false, error: "path required" }, 400);
+  try {
+    // 1) 读取 zip 原始字节
+    const dRes = await fetch(`https://api.github.com/repos/${repo}/contents/${ghPath(zipPath)}?ref=${encodeURIComponent(useBranch)}`, { headers });
+    if (!dRes.ok) return json({ ok: false, error: "读取 zip 失败 " + dRes.status }, 502);
+    const meta = (await dRes.json()) as any;
+    if (meta.type !== "file") return json({ ok: false, error: "不是文件" }, 400);
+    const base64 = meta.content.replace(/\s/g, "");
+    const bin = atob(base64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    // 2) 解压
+    let entries: Record<string, Uint8Array>;
+    try {
+      entries = unzipSync(bytes);
+    } catch {
+      return json({ ok: false, error: "zip 解析失败，请确认是有效的 zip 文件" }, 400);
+    }
+    // 3) 目标目录 = zip 所在目录
+    const dir = zipPath.split("/").filter(Boolean).slice(0, -1).join("/");
+    const saved: string[] = [];
+    const failed: string[] = [];
+    const names = Object.keys(entries || {}).filter((n) => n && !n.endsWith("/"));
+    for (const name of names) {
+      const target = dir ? `${dir}/${name}` : name;
+      const rawApi = `https://api.github.com/repos/${repo}/contents/${ghPath(target)}`;
+      let sha: string | undefined;
+      const exist = await fetch(`${rawApi}?ref=${encodeURIComponent(useBranch)}`, { headers });
+      if (exist.ok) sha = ((await exist.json()) as any).sha;
+      const payload: any = { message: `docs: unzip ${target}`, content: bytesToBase64(entries[name]), branch: useBranch };
       if (sha) payload.sha = sha;
       const res = await fetch(rawApi, { method: "PUT", headers, body: JSON.stringify(payload) });
       if (!res.ok) { failed.push(name); continue; }
