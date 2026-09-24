@@ -72,6 +72,8 @@ a{color:var(--accent);text-decoration:none}
 .wk-list li:last-child{border-bottom:none}
 .wk-list .name{font-size:13px;font-weight:500}
 .wk-list .meta{font-size:11px;color:var(--muted);margin-top:1px}
+.wk-list .chip{display:inline-block;font-size:11px;color:var(--accent);background:rgba(249,115,22,.1);border:1px solid rgba(249,115,22,.25);border-radius:3px;padding:1px 7px;margin-top:4px;margin-right:6px}
+.wk-list .chipTag{color:var(--muted);background:var(--hover);border-color:var(--border)}
 .wk-list .ops{display:flex;gap:6px;flex-shrink:0}
 /* 评论条目 */
 .wk-comment{display:flex;gap:10px;padding:10px 6px;border-bottom:1px solid var(--border)}
@@ -162,6 +164,13 @@ function switchTab(name){
 }
 
 // ---------- 管理文章 ----------
+// 用历史分类/标签填充输入框下拉建议
+function wireTaxonomySuggest(d){
+  const ac=d&&d.allCategories||[], at=d&&d.allTags||[];
+  const cl=$('#catList'), tl=$('#tagList');
+  if(cl){ cl.innerHTML=''; ac.forEach(x=>{ const o=document.createElement('option'); o.value=x; cl.appendChild(o); }); }
+  if(tl){ tl.innerHTML=''; at.forEach(x=>{ const o=document.createElement('option'); o.value=x; tl.appendChild(o); }); }
+}
 async function loadPosts(){
   const list = $('#postList'); if(!list) return;
   list.innerHTML = '<li class="empty">加载中...</li>';
@@ -170,11 +179,15 @@ async function loadPosts(){
   if(!r.ok){ list.innerHTML = '<li class="empty">加载失败：'+(r.data&&r.data.error||r.status)+'</li>'; return; }
   const posts = (r.data.posts||[]).slice().sort((a,b)=>String(b.name||'').localeCompare(String(a.name||'')));
   if(!posts.length){ list.innerHTML='<li class="empty">还没有文章，点右上角「＋ 添加新文章」开始写作</li>'; return; }
+  wireTaxonomySuggest(r.data);
   list.innerHTML='';
   posts.forEach(p=>{
     const li=document.createElement('li');
     const name=(p.name||'').replace(/\\.md$/,'');
-    li.innerHTML = '<div><div class="name">'+esc(name)+'</div><div class="meta">'+esc(p.path)+'</div></div>'+
+    const cat=(p.categories||[]).map(esc).join(' / ');
+    const tag=(p.tags||[]).map(esc).join(' · ');
+    const taxo='<div class="meta">'+esc(p.path)+'</div>'+(cat?'<span class="chip">'+cat+'</span>':'')+(tag?'<span class="chip chipTag">'+tag+'</span>':'');
+    li.innerHTML = '<div><div class="name">'+esc(name)+'</div>'+taxo+'</div>'+
       '<div class="ops">'+
       '<button class="wk-btn ghost sm" data-a="edit" data-path="'+esc(p.path)+'">编辑</button>'+
       '<button class="wk-btn danger sm" data-a="del" data-path="'+esc(p.path)+'" data-name="'+esc(name)+'">删除</button>'+
@@ -648,9 +661,11 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string): string {
       <input class="wk-input" id="title" placeholder="文章标题">
       <div class="wk-row">
         <div class="wk-field"><label class="wk-label">日期</label><input class="wk-input" type="date" id="date"></div>
-        <div class="wk-field"><label class="wk-label">分类</label><input class="wk-input" id="categories" placeholder="逗号或顿号分隔"></div>
-        <div class="wk-field"><label class="wk-label">标签</label><input class="wk-input" id="tags" placeholder="逗号或顿号分隔"></div>
+        <div class="wk-field"><label class="wk-label">分类（可从历史中选择或自定义，多个用逗号分开）</label><input class="wk-input" id="categories" list="catList" placeholder="如 刷机,教程"></div>
+        <div class="wk-field"><label class="wk-label">标签（可从历史中选择或自定义，多个用逗号分开）</label><input class="wk-input" id="tags" list="tagList" placeholder="如 刷机,教程"></div>
       </div>
+      <datalist id="catList"></datalist>
+      <datalist id="tagList"></datalist>
       <label class="wk-label">正文（Markdown，分屏预览）</label>
       <div id="edt"></div>
       <div class="toolbar" style="justify-content:flex-end;margin-top:12px">

@@ -204,11 +204,32 @@ async function handleListPosts(env: Bindings): Promise<Response> {
     );
     if (!res.ok) return json({ ok: false, error: "github error " + res.status }, 502);
     const data = (await res.json()) as any[];
-    const posts = (data || [])
-      .filter((f) => f.name?.endsWith(".md"))
-      .map((f) => ({ name: f.name, path: f.path, sha: f.sha, size: f.size }))
-      .sort((a, b) => String(b.name).localeCompare(String(a.name)));
-    return json({ ok: true, posts });
+    const files = (data || []).filter((f) => f.name?.endsWith(".md"));
+
+    // 并行读取每篇 front matter，提取分类/标签
+    const posts = await Promise.all(files.map(async (f) => {
+      let categories: string[] = [];
+      let tags: string[] = [];
+      try {
+        const g = await fetch(`https://api.github.com/repos/${repo}/contents/${encodeURIComponent(f.path)}`, { headers });
+        if (g.ok) {
+          const d = (await g.json()) as any;
+          const raw = decodeURIComponent(escape(atob(d.content)));
+          const parsed = parseFrontMatter(raw);
+          categories = parsed.categories || [];
+          tags = parsed.tags || [];
+        }
+      } catch {}
+      return { name: f.name, path: f.path, sha: f.sha, size: f.size, categories, tags };
+    }));
+
+    posts.sort((a, b) => String(b.name).localeCompare(String(a.name)));
+
+    // 聚合历史分类/标签（供输入框下拉建议）
+    const allCategories = [...new Set(posts.flatMap((p) => p.categories))];
+    const allTags = [...new Set(posts.flatMap((p) => p.tags))];
+
+    return json({ ok: true, posts, allCategories, allTags });
   } catch (e) {
     return json({ ok: false, error: String(e) }, 500);
   }
