@@ -125,11 +125,23 @@ const api = async (url, opt={}) => {
 };
 
 function toast(msg, isErr){
-  const el = $('#msg'); if(!el) return;
+  let el = $('#msg');
+  if(!el || el.offsetParent===null){
+    // 全局兜底：当前激活页没有可见的 #msg 时，用一个全局浮层
+    el = $('#wk-toast');
+    if(!el){
+      el = document.createElement('div');
+      el.id='wk-toast';
+      el.style.cssText='position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:2000;padding:8px 16px;font-size:13px;border-radius:3px;color:#fff;background:#111827;box-shadow:0 2px 8px rgba(0,0,0,.2);max-width:80vw';
+      document.body.appendChild(el);
+    }
+    el.style.background = isErr ? '#dc2626' : '#111827';
+  }
   el.textContent = msg;
-  el.className = 'msg ' + (isErr ? 'err' : 'ok');
+  el.className = 'msg ' + (isErr ? 'err' : 'ok') + (el.id==='wk-toast' ? ' wk-toast' : '');
+  el.style.opacity = '1';
   clearTimeout(toast._t);
-  toast._t = setTimeout(()=>{ if(el) el.textContent=''; }, 4000);
+  toast._t = setTimeout(()=>{ el.style.opacity='0'; }, 2400);
 }
 
 // 读取登录态：Cookie 或 localStorage；非法则跳登录页（由 /admin 服务端已保证 Cookie 存在）
@@ -156,7 +168,7 @@ async function loadPosts(){
   const r = await api(API_BASE+'/posts');
   if(r.status===401){ redirectLogin(); return; }
   if(!r.ok){ list.innerHTML = '<li class="empty">加载失败：'+(r.data&&r.data.error||r.status)+'</li>'; return; }
-  const posts = (r.data.posts||[]).slice().reverse();
+  const posts = (r.data.posts||[]).slice().sort((a,b)=>String(b.name||'').localeCompare(String(a.name||'')));
   if(!posts.length){ list.innerHTML='<li class="empty">还没有文章，点右上角「＋ 添加新文章」开始写作</li>'; return; }
   list.innerHTML='';
   posts.forEach(p=>{
@@ -186,7 +198,6 @@ async function openEdit(path){
   $('#date').value=(p.date||new Date().toISOString().slice(0,10)).slice(0,10);
   $('#tags').value=(p.tags||[]).join('，');
   $('#categories').value=(p.categories||[]).join('，');
-  $('#theme').value=p.theme||'';
   $('#editorTitle').textContent='编辑：'+(p.title||nameOf(p.path));
   $('#saveBtn').textContent='保存修改';
   hideBuildBanner();
@@ -198,7 +209,7 @@ async function openEdit(path){
 function nameOf(path){ return String(path||'').split('/').pop().replace(/\\.md$/,'')||'未命名'; }
 function newArticle(){
   editingPath='';
-  $('#title').value=''; $('#date').value=new Date().toISOString().slice(0,10); $('#tags').value=''; $('#categories').value=''; $('#theme').value='';
+  $('#title').value=''; $('#date').value=new Date().toISOString().slice(0,10); $('#tags').value=''; $('#categories').value='';
   $('#editorTitle').textContent='发布新文章';
   $('#saveBtn').textContent='发布文章';
   hideBuildBanner();
@@ -215,7 +226,6 @@ async function savePost(){
   if(!title){ toast('请填写标题',true); return; }
   if(!content.trim()){ toast('请填写正文',true); return; }
   const body={ title, content,
-    theme:$('#theme').value.trim(),
     date:$('#date').value||new Date().toISOString().slice(0,10),
     tags:$('#tags').value.split(/[,，\\s]+/).map(s=>s.trim()).filter(Boolean),
     categories:$('#categories').value.split(/[,，\\s]+/).map(s=>s.trim()).filter(Boolean) };
@@ -380,26 +390,6 @@ function pollBuild(){
       showBuildBanner('工作流结束（'+(d.conclusion||d.status||'未知')+'），可能未成功，请到 '+esc(d.html_url||'')+' 查看详情','err');
     }
   }, 5000);
-}
-
-// ---------- 写作辅助：主题 / 标题选项 ----------
-async function loadMeta(){
-  const r=await api(API_BASE+'/meta');
-  if(!r.ok) return;
-  const d=r.data||{};
-  const tl=$('#titleList'), th=$('#themeList');
-  if(tl){
-    tl.innerHTML='';
-    (d.titles||[]).forEach(t=>{
-      const o=document.createElement('option'); o.value=t; tl.appendChild(o);
-    });
-  }
-  if(th){
-    th.innerHTML='';
-    (d.themes||[]).forEach(t=>{
-      const o=document.createElement('option'); o.value=t; th.appendChild(o);
-    });
-  }
 }
 
 // ---------- 文件管理 ----------
@@ -595,7 +585,6 @@ document.addEventListener('DOMContentLoaded', ()=>{
   $('#branchSel').onchange=e=>{ fileBranch=e.target.value||'main'; filePath=''; loadFiles(); };
   $('#newFolderBtn').onclick=newFolder;
   loadBranches(true);
-  loadMeta();
   $$('.wk-tab').forEach(t=>t.onclick=()=>switchTab(t.dataset.tab));
 });
 `;
@@ -641,6 +630,7 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string): string {
         <button class="wk-btn sm" id="newBtn">＋ 添加新文章</button>
       </div>
       <ul class="wk-list" id="postList"><li class="empty">加载中...</li></ul>
+      <div id="buildBanner" class="build-banner hidden"></div>
     </div>
   </div>
 
@@ -654,21 +644,15 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string): string {
           <button class="wk-btn ghost sm" onclick="newArticle()">清空重写</button>
         </div>
       </div>
-      <label class="wk-label">标题（可从下拉选择已有标题或自定义）</label>
-      <input class="wk-input" id="title" list="titleList" placeholder="文章标题">
-      <datalist id="titleList"></datalist>
+      <label class="wk-label">标题</label>
+      <input class="wk-input" id="title" placeholder="文章标题">
       <div class="wk-row">
         <div class="wk-field"><label class="wk-label">日期</label><input class="wk-input" type="date" id="date"></div>
         <div class="wk-field"><label class="wk-label">分类</label><input class="wk-input" id="categories" placeholder="逗号或顿号分隔"></div>
         <div class="wk-field"><label class="wk-label">标签</label><input class="wk-input" id="tags" placeholder="逗号或顿号分隔"></div>
       </div>
-      <div class="wk-row">
-        <div class="wk-field"><label class="wk-label">主题（从已有主题中选择或自定义，可留空用站点默认）</label><input class="wk-input" id="theme" list="themeList" placeholder="如 indigo"></div>
-      </div>
-      <datalist id="themeList"></datalist>
       <label class="wk-label">正文（Markdown，分屏预览）</label>
       <div id="edt"></div>
-      <div id="buildBanner" class="build-banner hidden"></div>
       <div class="toolbar" style="justify-content:flex-end;margin-top:12px">
         <button class="wk-btn" id="saveBtn">发布文章</button>
       </div>

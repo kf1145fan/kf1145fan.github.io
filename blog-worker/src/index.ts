@@ -82,12 +82,6 @@ app.delete("/admin/api/post", async (c) => {
   return handleDeletePost(c.env as Bindings, path);
 });
 
-// 写作辅助：可用主题 + 已有文章标题（供选择/自定义）
-app.get("/admin/api/meta", async (c) => {
-  if (!isAdmin(c.get("userInfo"))) return json({ error: "unauthorized" }, 401);
-  return handleMeta(c.env as Bindings);
-});
-
 // 部署工作流状态：/admin/api/build
 app.get("/admin/api/build", async (c) => {
   if (!isAdmin(c.get("userInfo"))) return json({ error: "unauthorized" }, 401);
@@ -212,7 +206,8 @@ async function handleListPosts(env: Bindings): Promise<Response> {
     const data = (await res.json()) as any[];
     const posts = (data || [])
       .filter((f) => f.name?.endsWith(".md"))
-      .map((f) => ({ name: f.name, path: f.path, sha: f.sha, size: f.size }));
+      .map((f) => ({ name: f.name, path: f.path, sha: f.sha, size: f.size }))
+      .sort((a, b) => String(b.name).localeCompare(String(a.name)));
     return json({ ok: true, posts });
   } catch (e) {
     return json({ ok: false, error: String(e) }, 500);
@@ -250,7 +245,6 @@ async function handleWritePost(
 
   const title = String(body.title || "").trim();
   const content = String(body.content || "");
-  const theme = String(body.theme || "").trim();
   const tags = Array.isArray(body.tags) ? body.tags.map((x: any) => String(x)) : [];
   const categories = Array.isArray(body.categories)
     ? body.categories.map((x: any) => String(x))
@@ -270,7 +264,6 @@ async function handleWritePost(
 
   // front matter
   const fm: string[] = ["---", `title: '${title.replace(/'/g, "\\'")}'`, `date: ${date} 00:00:00`];
-  if (theme) fm.push(`theme: ${theme}`);
   if (categories.length) fm.push(`categories:\n  ${categories.map((x: any) => `- ${x}`).join("\n  ")}`);
   if (tags.length) fm.push(`tags:\n  ${tags.map((x: any) => `- ${x}`).join("\n  ")}`);
   fm.push("---", "");
@@ -324,13 +317,11 @@ async function handleDeletePost(env: Bindings, path: string): Promise<Response> 
 function parseFrontMatter(raw: string): {
   title: string;
   date: string;
-  theme: string;
   categories: string[];
   tags: string[];
   body: string;
 } {
   let title = "";
-  let theme = "";
   const categories: string[] = [];
   const tags: string[] = [];
   let date = "";
@@ -341,12 +332,10 @@ function parseFrontMatter(raw: string): {
     body = m[2];
     const is = fm.match(/^title:\s*['"]?(.*?)['"]?\s*$/m);
     const ds = fm.match(/^date:\s*(\d{4}-\d{2}-\d{2})/m);
-    const ts_ = fm.match(/^theme:\s*(.+)$/m);
     const cs = fm.match(/^categories:\s*([^\r\n]*)(?:\r?\n([\s\S]*?))?(?=\r?\n[a-zA-Z0-9_]+:|$)/im);
     const ts = fm.match(/^tags:\s*([^\r\n]*)(?:\r?\n([\s\S]*?))?(?=\r?\n[a-zA-Z0-9_]+:|$)/im);
     if (is) title = is[1].trim();
     if (ds) date = ds[1];
-    if (ts_) theme = ts_[1].trim();
     const parseList = (inline: string | undefined, multi: string | undefined): string[] => {
       const out: string[] = [];
       if (inline && inline.trim()) {
@@ -363,45 +352,12 @@ function parseFrontMatter(raw: string): {
     if (cs) categories.push(...parseList(cs[1], cs[2]));
     if (ts) tags.push(...parseList(ts[1], ts[2]));
   }
-  return { title, date, theme, categories, tags, body: body.replace(/<!--\s*more\s*-->[\s\S]*$/, "").trimStart() };
+  return { title, date, categories, tags, body: body.replace(/<!--\s*more\s*-->[\s\S]*$/, "").trimStart() };
 }
 
 function stripFrontMatter(content: string): string {
   const m = content.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?([\s\S]*)$/);
   return (m ? m[1] : content).trimStart();
-}
-
-// ---------- 写作辅助：主题 / 已有标题 ----------
-async function handleMeta(env: Bindings): Promise<Response> {
-  const { token, repo, postsDir, headers } = ghConfig(env);
-  if (!token) return json({ ok: false, error: "GH_TOKEN not configured" }, 500);
-  const themes: string[] = [];
-  const titles: string[] = [];
-  try {
-    // 读取 themes 目录下的主题文件夹
-    const tRes = await fetch(`https://api.github.com/repos/${repo}/contents/themes`, { headers });
-    if (tRes.ok) {
-      const arr = (await tRes.json()) as any[];
-      (arr || []).forEach((f) => { if (f.type === "dir") themes.push(f.name); });
-    }
-    // 读取已有文章标题（并取其 theme）
-    const pRes = await fetch(`https://api.github.com/repos/${repo}/contents/${postsDir}`, { headers });
-    if (pRes.ok) {
-      const arr = (await pRes.json()) as any[];
-      const files = (arr || []).filter((f: any) => f.name?.endsWith(".md")).slice(0, 50);
-      await Promise.all(files.map(async (f: any) => {
-        try {
-          const g = await fetch(`https://api.github.com/repos/${repo}/contents/${encodeURIComponent(f.path)}`, { headers });
-          if (!g.ok) return;
-          const d = (await g.json()) as any;
-          const raw = decodeURIComponent(escape(atob(d.content)));
-          const parsed = parseFrontMatter(raw);
-          if (parsed.title) titles.push(parsed.title);
-        } catch {}
-      }));
-    }
-  } catch {}
-  return json({ ok: true, themes, titles });
 }
 
 // ---------- 部署工作流状态 ----------
