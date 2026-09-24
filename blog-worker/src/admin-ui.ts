@@ -91,7 +91,7 @@ a{color:var(--accent);text-decoration:none}
 .wk-comment .ip{font-size:10px;color:var(--muted);margin-left:4px}
 /* 编辑区 */
 #edt{min-height:480px;border:1px solid var(--border);border-radius:3px}
-.hidden{display:none}
+.hidden{display:none!important}
 .toolbar{display:flex;gap:8px;align-items:center;margin-bottom:10px}
 .empty{color:var(--muted);text-align:center;padding:26px 0;font-size:13px}
 .filters{display:flex;gap:6px;flex-wrap:wrap}
