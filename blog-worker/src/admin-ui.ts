@@ -568,41 +568,6 @@ function newFolder(){
   });
 }
 
-// ---------- 草稿自动保存（刷新后仍保留，参考 cp.802213.xyz）----------
-const DRAFT_KEY='wk_draft';
-function readDraft(){
-  try{ return JSON.parse(localStorage.getItem(DRAFT_KEY)||'null'); }catch(e){ return null; }
-}
-function saveDraft(){
-  if(activePage!=='write') return;
-  const d={ title:$('#title').value, date:$('#date').value, categories:$('#categories').value,
-    tags:$('#tags').value, editingPath, content:editor?editor.getValue():(pendingEditorValue||''), updatedAt:Date.now() };
-  try{ localStorage.setItem(DRAFT_KEY, JSON.stringify(d)); }catch(e){}
-}
-function clearDraft(){ try{ localStorage.removeItem(DRAFT_KEY); }catch(e){} }
-// 独立写作页初始化：从草稿恢复刷新前未保存的内容
-function initWritePage(){
-  const d=readDraft();
-  if(d&&(d.content||d.title)){
-    $('#title').value=d.title||'';
-    $('#date').value=d.date||new Date().toISOString().slice(0,10);
-    $('#categories').value=d.categories||'';
-    $('#tags').value=d.tags||'';
-    editingPath=d.editingPath||'';
-    if(editingPath){
-      $('#editorTitle').textContent='编辑：'+((d.title||'')||nameOf(editingPath));
-      $('#saveBtn').textContent='保存修改';
-    }
-    pendingEditorValue=d.content||'';
-    toast('已恢复刷新前的未发布草稿');
-  } else {
-    $('#date').value=new Date().toISOString().slice(0,10);
-  }
-  showPage('write');
-  initEditorOnce();
-  window.scrollTo(0,0);
-}
-
 // ---------- 写作页草稿自动保存（刷新后恢复，参考 cp.802213.xyz）----------
 // 仅「发布新文章」页（/admin/write）自动保存；编辑已有文章不覆盖草稿。
 const DRAFT_KEY='wk_draft_v1';
