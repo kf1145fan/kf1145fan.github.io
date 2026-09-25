@@ -1,0 +1,38 @@
+name: 仅更新 GitHub Pages
+
+on:
+  # 仅手动触发：重新构建 Hexo 并推送到 gh-pages（不部署 Cloudflare Worker）
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-blog:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Hexo deps
+        run: npm install
+
+      - name: Generate site
+        run: npx hexo generate
+
+      - name: Deploy to gh-pages
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          REPO: "kf1145fan/kf1145fan.github.io"
+        run: |
+          cd public || exit 1
+          git init -q
+          git config user.name "deployer"
+          git config user.email "deployer@users.noreply.github.com"
+          git add -A
+          git commit -m "deploy: $GITHUB_SHA" -q
+          git push -f "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" HEAD:gh-pages -q

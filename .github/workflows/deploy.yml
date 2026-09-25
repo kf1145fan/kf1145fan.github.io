@@ -1,7 +1,7 @@
-name: Deploy Blog
+name: 完整部署：GH Pages + CF Worker
 
 on:
-  # 仅手动触发部署（「运行工作流」按钮或 GitHub 手动 Run），不再随 push 自动部署
+  # 仅手动触发（初次完整部署：构建博客→推 gh-pages、部署 waline、部署 blog-worker）
   workflow_dispatch:
 
 permissions:
