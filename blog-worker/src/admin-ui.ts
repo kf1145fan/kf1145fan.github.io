@@ -103,6 +103,12 @@ a{color:var(--accent);text-decoration:none}
 @media(prefers-color-scheme:dark){.msg.ok{color:#4ade80}}
 /* 部署历史 */
 /* 分类/标签历史建议（浏览器原生 datalist，可输入或选择） */
+/* 访问量统计卡片 */
+.stats-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+.stats{display:flex;gap:12px;min-width:max-content}
+.stat-card{background:var(--card);border:1px solid var(--border);border-radius:2px;padding:14px 22px;min-width:130px}
+.stat-card .num{font-size:22px;font-weight:700;color:var(--accent);line-height:1.3}
+.stat-card .lbl{font-size:11px;color:var(--muted)}
 /* 顶部标签栏：移动端横向滑动 */
 .wk-tabs{display:flex;gap:0;max-width:1080px;margin:14px auto 0;padding:0 16px;border-bottom:1px solid var(--border);overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none}
 .wk-tabs::-webkit-scrollbar{display:none}
@@ -173,7 +179,7 @@ function getToken(){
 }
 
 // ---------- tab（独立路由 /admin/xxx，SPA 切换：仅改地址栏，绝不刷新）----------
-const TAB_NAMES=['manage','comments','files','build','subscribe','write'];
+const TAB_NAMES=['manage','comments','files','build','visit','subscribe','write'];
 function showPage(name){ activePage=name; $$('.wk-page').forEach(p=>p.classList.toggle('hidden', p.id!=='page-'+name)); }
 // 进入写作页（新建/编辑共用）：首次初始化编辑器与草稿
 let writeInited=false;
@@ -201,11 +207,26 @@ function go(name){
     if(name==='comments') loadComments();
     if(name==='files') loadFiles();
     if(name==='build') loadBuildHistory();
+    if(name==='visit') loadStats();
     window.scrollTo(0,0);
   }
   try{ history.replaceState(null,'','/admin/'+name); }catch(e){}
 }
 function switchTab(name){ go(name); }
+
+// 访问量统计：读取今日/总访问数（数据来自 /api/visit/stats）
+async function loadStats(){
+  const today=$('#statToday'), total=$('#statTotal');
+  if(today) today.textContent='-';
+  if(total) total.textContent='-';
+  try{
+    const r=await api('/api/visit/stats');
+    if(!r.ok) return;
+    const d=r.data||{};
+    if(today) today.textContent=(d.today==null?'-':d.today);
+    if(total) total.textContent=(d.total==null?'-':d.total);
+  }catch(e){}
+}
 
 // ---------- 管理文章 ----------
 // 用历史分类/标签填充输入框浏览器原生 datalist（可输入或从历史下拉选择）
@@ -777,7 +798,7 @@ document.addEventListener('DOMContentLoaded', ()=>{
 
 export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "manage"): string {
   const repo = String(ghRepo || "");
-  const INITIAL = ["manage","comments","files","build","subscribe","write"].includes(initial)
+  const INITIAL = ["manage","comments","files","build","visit","subscribe","write"].includes(initial)
     ? initial
     : "manage";
   return `<!doctype html>
@@ -808,6 +829,7 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
   <button class="wk-tab ${INITIAL === "comments" ? "active" : ""}" data-tab="comments">评论管理</button>
   <button class="wk-tab ${INITIAL === "files" ? "active" : ""}" data-tab="files">文件管理</button>
   <button class="wk-tab ${INITIAL === "build" ? "active" : ""}" data-tab="build">部署记录</button>
+  <button class="wk-tab ${INITIAL === "visit" ? "active" : ""}" data-tab="visit">访问量</button>
   <button class="wk-tab ${INITIAL === "subscribe" ? "active" : ""}" data-tab="subscribe">订阅管理</button>
 </div>
 
@@ -913,6 +935,14 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
       <p class="wk-label" style="margin-top:0">改完文件后点「运行工作流」即可手动触发部署，无需推送代码。点击「查看日志」可跳转 GitHub Actions 查看完整构建日志。</p>
       <div class="table-scroll"><div id="buildHistory" class="empty">加载中...</div></div>
     </div>
+  </div>
+
+  <!-- 访问量 -->
+  <div id="page-visit" class="wk-page hidden">
+    <div class="stats-scroll"><div class="stats">
+      <div class="stat-card"><div class="num" id="statToday">-</div><div class="lbl">今日访问数</div></div>
+      <div class="stat-card"><div class="num" id="statTotal">-</div><div class="lbl">总访问量</div></div>
+    </div></div>
   </div>
 
   <!-- 订阅管理（空界面，功能开发中） -->

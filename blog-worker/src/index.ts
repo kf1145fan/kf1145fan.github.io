@@ -173,6 +173,8 @@ app.get("/admin/files", (c) => adminPage(c, "files"));
 app.get("/admin/files/", (c) => adminPage(c, "files"));
 app.get("/admin/build", (c) => adminPage(c, "build"));
 app.get("/admin/build/", (c) => adminPage(c, "build"));
+app.get("/admin/visit", (c) => adminPage(c, "visit"));
+app.get("/admin/visit/", (c) => adminPage(c, "visit"));
 app.get("/admin/subscribe", (c) => adminPage(c, "subscribe"));
 app.get("/admin/subscribe/", (c) => adminPage(c, "subscribe"));
 
