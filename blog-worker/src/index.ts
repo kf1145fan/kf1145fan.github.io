@@ -88,6 +88,18 @@ app.get("/admin/api/build", async (c) => {
   return handleBuildStatus(c.env as Bindings);
 });
 
+// 手动触发部署工作流：/admin/api/build/trigger
+app.post("/admin/api/build/trigger", async (c) => {
+  if (!isAdmin(c.get("userInfo"))) return json({ error: "unauthorized" }, 401);
+  return handleTriggerBuild(c.env as Bindings);
+});
+
+// 部署历史记录：/admin/api/build/history
+app.get("/admin/api/build/history", async (c) => {
+  if (!isAdmin(c.get("userInfo"))) return json({ error: "unauthorized" }, 401);
+  return handleBuildHistory(c.env as Bindings);
+});
+
 // ---------- 文件管理（GitHub Contents API）----------
 app.get("/admin/api/branches", async (c) => {
   if (!isAdmin(c.get("userInfo"))) return json({ error: "unauthorized" }, 401);
@@ -432,6 +444,51 @@ async function handleBuildStatus(env: Bindings): Promise<Response> {
       started: run.created_at || "",
       html_url: run.html_url || "",
     });
+  } catch (e) {
+    return json({ ok: false, error: String(e) }, 500);
+  }
+}
+
+// 手动触发部署工作流（改完文章/文件后一键重建站点）
+async function handleTriggerBuild(env: Bindings): Promise<Response> {
+  const { token, repo, branch, headers } = ghConfig(env);
+  if (!token) return json({ ok: false, error: "GH_TOKEN not configured" }, 500);
+  try {
+    const res = await fetch(
+      `https://api.github.com/repos/${repo}/actions/workflows/deploy.yml/dispatches`,
+      { method: "POST", headers, body: JSON.stringify({ ref: branch }) },
+    );
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      return json({ ok: false, error: "触发失败 github error " + res.status, detail }, 502);
+    }
+    return json({ ok: true, message: "已触发部署工作流" });
+  } catch (e) {
+    return json({ ok: false, error: String(e) }, 500);
+  }
+}
+
+// 部署历史记录（最近 20 次）
+async function handleBuildHistory(env: Bindings): Promise<Response> {
+  const { token, repo, headers } = ghConfig(env);
+  if (!token) return json({ ok: false, error: "GH_TOKEN not configured" }, 500);
+  try {
+    const res = await fetch(
+      `https://api.github.com/repos/${repo}/actions/workflows/deploy.yml/runs?per_page=20`,
+      { headers },
+    );
+    if (!res.ok) return json({ ok: false, error: "github error " + res.status }, 502);
+    const data = (await res.json()) as any;
+    const runs = ((data.workflow_runs || []) as any[]).map((r: any) => ({
+      id: r.id,
+      name: r.display_title || r.name || "",
+      status: r.status,
+      conclusion: r.conclusion || "",
+      created_at: r.created_at || "",
+      head_sha: (r.head_sha || "").slice(0, 7),
+      html_url: r.html_url || "",
+    }));
+    return json({ ok: true, runs });
   } catch (e) {
     return json({ ok: false, error: String(e) }, 500);
   }

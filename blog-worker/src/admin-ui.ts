@@ -100,6 +100,17 @@ a{color:var(--accent);text-decoration:none}
 .filters .wk-btn{padding:3px 12px;font-size:12px;border-radius:3px}
 .msg{font-size:12px;min-height:18px}.msg.err{color:var(--danger)}.msg.ok{color:#1a7f37}
 @media(prefers-color-scheme:dark){.msg.ok{color:#4ade80}}
+/* 部署历史 */
+.wk-build-table{width:100%;border-collapse:collapse;font-size:12px}
+.wk-build-table th,.wk-build-table td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--border);vertical-align:middle}
+.wk-build-table th{color:var(--muted);font-weight:500}
+.wk-build-table code{background:var(--hover);padding:1px 5px;border-radius:2px;font-size:11px}
+.wk-badge{display:inline-block;font-size:11px;padding:1px 8px;border-radius:2px;white-space:nowrap}
+.wk-badge.success{background:#d1f5d3;color:#147d19}
+.wk-badge.fail{background:#fde3e3;color:#d1241f}
+.wk-badge.running{background:#fff3cd;color:#8a6d00}
+.wk-badge.wait{background:var(--hover);color:var(--muted)}
+@media(prefers-color-scheme:dark){.wk-badge.success{color:#4ade80;background:rgba(74,222,128,.12)}.wk-badge.fail{color:#f87171;background:rgba(248,113,113,.12)}.wk-badge.running{color:#fbbf24;background:rgba(251,191,36,.12)}}
 `;
 
 const SCRIPT = `
@@ -162,6 +173,7 @@ function switchTab(name){
   if(name==='manage') loadPosts();
   if(name==='comments') loadComments();
   if(name==='files') loadFiles();
+  if(name==='build') loadBuildHistory();
 }
 
 // ---------- 管理文章 ----------
@@ -367,14 +379,15 @@ async function onCommentAction(e){
 // ---------- 构建状态横幅 ----------
 let buildTimer=null;
 function showBuildBanner(msg, cls){
-  const b=$('#buildBanner'); if(!b) return;
-  b.className='build-banner '+(cls||'');
-  b.textContent=msg;
-  b.classList.remove('hidden');
+  [$('#buildBanner'), $('#buildBannerBuild')].forEach((b)=>{
+    if(!b) return;
+    b.className='build-banner '+(cls||'');
+    b.textContent=msg;
+    b.classList.remove('hidden');
+  });
 }
 function hideBuildBanner(){
-  const b=$('#buildBanner'); if(!b) return;
-  b.classList.add('hidden');
+  [$('#buildBanner'), $('#buildBannerBuild')].forEach((b)=>{ if(b) b.classList.add('hidden'); });
 }
 function pollBuild(){
   if(buildTimer) clearInterval(buildTimer);
@@ -399,6 +412,50 @@ function pollBuild(){
       showBuildBanner('工作流结束（'+(d.conclusion||d.status||'未知')+'），可能未成功，请到 '+esc(d.html_url||'')+' 查看详情','err');
     }
   }, 5000);
+}
+
+// ---------- 手动运行工作流 + 部署记录 ----------
+async function triggerBuild(){
+  if(!confirm('确定运行部署工作流吗？将重建整个站点。')) return;
+  const r=await api(API_BASE+'/build/trigger',{method:'POST'});
+  if(r.status===401){ redirectLogin(); return; }
+  if(r.ok&&r.data&&r.data.ok){
+    toast('已触发部署工作流，稍候开始构建');
+    showBuildBanner('已触发部署工作流，正在重建站点…');
+    // 触发后 run 需几秒才出现，稍作延迟后开始轮询与刷新历史
+    setTimeout(pollBuild, 3000);
+    setTimeout(()=>{ const box=$('#buildHistory'); if(box) loadBuildHistory(); }, 4000);
+  } else {
+    toast('触发失败：'+(r.data&&r.data.error||r.status),true);
+    if(r.data&&r.data.detail) toast(r.data.detail,true);
+  }
+}
+function buildBadge(status, conclusion){
+  if(conclusion==='success') return '<span class="wk-badge success">成功</span>';
+  if(conclusion==='failure') return '<span class="wk-badge fail">失败</span>';
+  if(conclusion==='cancelled') return '<span class="wk-badge fail">已取消</span>';
+  if(conclusion==='timed_out') return '<span class="wk-badge fail">超时</span>';
+  if(status==='completed') return '<span class="wk-badge wait">'+(conclusion||'结束')+'</span>';
+  return '<span class="wk-badge running">运行中</span>';
+}
+async function loadBuildHistory(){
+  const box=$('#buildHistory'); if(!box) return;
+  box.innerHTML='<div class="empty">加载中...</div>';
+  const r=await api(API_BASE+'/build/history');
+  if(r.status===401){ redirectLogin(); return; }
+  if(!r.ok){ box.innerHTML='<div class="empty">加载失败：'+(r.data&&r.data.error||r.status)+'</div>'; return; }
+  const runs=r.data.runs||[];
+  if(!runs.length){ box.innerHTML='<div class="empty">暂无部署记录</div>'; return; }
+  let html='<table class="wk-build-table"><thead><tr><th>#</th><th>时间</th><th>提交</th><th>状态</th><th>日志</th></tr></thead><tbody>';
+  runs.forEach(rn=>{
+    const t=rn.created_at?new Date(rn.created_at).toLocaleString('zh-CN',{hour12:false}):'';
+    html+='<tr><td><a href="'+esc(rn.html_url)+'" target="_blank" rel="noopener">#'+esc(rn.id)+'</a></td>'+
+      '<td>'+esc(t)+'</td><td><code>'+esc(rn.head_sha)+'</code></td>'+
+      '<td>'+buildBadge(rn.status,rn.conclusion)+'</td>'+
+      '<td><a class="wk-btn ghost sm" href="'+esc(rn.html_url)+'" target="_blank" rel="noopener">查看日志 ↗</a></td></tr>';
+  });
+  html+='</tbody></table>';
+  box.innerHTML=html;
 }
 
 // ---------- 文件管理 ----------
@@ -624,6 +681,7 @@ document.addEventListener('DOMContentLoaded', ()=>{
     location.replace('/admin/login');
   };
   $('#newBtn').onclick=()=>location.href='/admin/write';
+  $('#triggerBtn') && ($('#triggerBtn').onclick=triggerBuild);
   $('#saveBtn').onclick=savePost;
   // 写作页表单：输入即自动保存草稿；关闭/刷新前兜底保存
   ['title','date','tags','categories'].forEach(id=>{
@@ -678,6 +736,7 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
   <button class="wk-tab active" data-tab="manage">管理文章</button>
   <button class="wk-tab" data-tab="comments">评论管理</button>
   <button class="wk-tab" data-tab="files">文件管理</button>
+  <button class="wk-tab" data-tab="build">部署记录</button>
 </div>
 
 <div class="wk-wrap">
@@ -688,7 +747,10 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
     <div class="wk-card">
       <div class="toolbar" style="justify-content:space-between;align-items:center">
         <h3 class="wk-title" style="margin:0;border:none;padding:0">已有文章</h3>
-        <button class="wk-btn sm" id="newBtn">＋ 添加新文章</button>
+        <div style="display:flex;gap:6px">
+          <button class="wk-btn act sm" id="triggerBtn" title="改完文章或文件后手动触发部署工作流，重建整个站点">▶ 运行工作流</button>
+          <button class="wk-btn sm" id="newBtn">＋ 添加新文章</button>
+        </div>
       </div>
       <ul class="wk-list" id="postList"><li class="empty">加载中...</li></ul>
     </div>
@@ -768,6 +830,19 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
         </div>
       </div>
       <textarea id="fileEditArea" style="flex:1;width:100%;font:13px/1.6 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;border:none;border-radius:0;padding:14px;background:var(--input-bg);color:var(--fg);outline:none;resize:none"></textarea>
+    </div>
+  </div>
+
+  <!-- 部署记录 -->
+  <div id="page-build" class="wk-page hidden">
+    <div id="buildBannerBuild" class="build-banner hidden" style="margin-bottom:10px"></div>
+    <div class="wk-card">
+      <div class="toolbar" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">
+        <h3 class="wk-title" style="margin:0;border:none;padding:0">部署记录</h3>
+        <button class="wk-btn act sm" onclick="triggerBuild()">▶ 手动运行工作流</button>
+      </div>
+      <p class="wk-label" style="margin-top:0">改完文件后点「运行工作流」即可手动触发部署，无需推送代码。点击「查看日志」可跳转 GitHub Actions 查看完整构建日志。</p>
+      <div id="buildHistory" class="empty">加载中...</div>
     </div>
   </div>
 
