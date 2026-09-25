@@ -137,12 +137,19 @@ app.post("/admin/api/unzip-path", async (c) => {
   return handleUnzipByPath(c.env as Bindings, await c.req.json());
 });
 
-// ---------- 5. /admin 统一管理后台（Waline 风格 + Vditor）----------
-// 独立登录页：未登录跳转到 /admin/login；已登录访问 /admin 直接渲染后台，不做跳转
+// ---------- 5. /admin 统一管理后台（独立页面：管理文章 / 写作 / 评论 / 文件）----------
+// 独立登录页：未登录跳转到 /admin/login
 app.get("/admin/login", (c) => c.html(renderAdminLoginPage(c.env.SITE_URL || "")));
 app.get("/admin/login/", (c) => c.html(renderAdminLoginPage(c.env.SITE_URL || "")));
-app.get("/admin", (c) => c.html(renderAdminPage(c.env.SITE_URL || "", c.env.GH_REPO || "")));
-app.get("/admin/", (c) => c.html(renderAdminPage(c.env.SITE_URL || "", c.env.GH_REPO || "")));
+// 已登录访问任意后台页直接渲染，不做跳转
+const adminPage = (c: any, initial: string) =>
+  c.html(renderAdminPage(c.env.SITE_URL || "", c.env.GH_REPO || "", initial));
+app.get("/admin", (c) => adminPage(c, "manage"));
+app.get("/admin/", (c) => adminPage(c, "manage"));
+app.get("/admin/manage", (c) => adminPage(c, "manage"));
+app.get("/admin/manage/", (c) => adminPage(c, "manage"));
+app.get("/admin/write", (c) => adminPage(c, "write"));
+app.get("/admin/write/", (c) => adminPage(c, "write"));
 
 // ---------- 6. 其余路径：反向代理 GitHub Pages 静态站点 ----------
 app.all("*", async (c) => {

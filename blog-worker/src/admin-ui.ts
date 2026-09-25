@@ -114,6 +114,7 @@ let editorInited = false;
 let editingPath = '';
 let pendingEditorValue = '';
 let editorReadyWait = 0;
+let activePage = 'manage';
 
 const $ = s => document.querySelector(s);
 const $$ = s => Array.from(document.querySelectorAll(s));
@@ -154,7 +155,7 @@ function getToken(){
 }
 
 // ---------- tab ----------
-function showPage(name){ $$('.wk-page').forEach(p=>p.classList.toggle('hidden', p.id!=='page-'+name)); }
+function showPage(name){ activePage=name; $$('.wk-page').forEach(p=>p.classList.toggle('hidden', p.id!=='page-'+name)); }
 function switchTab(name){
   $$('.wk-tab').forEach(t=>t.classList.toggle('active', t.dataset.tab===name));
   showPage(name);
@@ -227,6 +228,7 @@ function newArticle(){
   $('#saveBtn').textContent='发布文章';
   hideBuildBanner();
   pendingEditorValue='';
+  clearDraft();
   showPage('write');
   initEditorOnce();
   window.scrollTo(0,0);
@@ -250,9 +252,10 @@ async function savePost(){
   if(r.status===401){ redirectLogin(); return; }
   if(r.ok&&r.data&&r.data.ok){
     toast(isUpd?'保存成功，工作流将重建站点':'发布成功，工作流将重建站点');
+    clearDraft();
     showBuildBanner('已推送到 GitHub，部署工作流正在重建站点（约 40 秒），请稍候…');
     pollBuild();
-    switchTab('manage');
+    location.href='/admin/manage';
   } else toast('保存失败：'+(r.data&&r.data.error||r.status),true);
 }
 async function delPost(path,name){
@@ -304,7 +307,7 @@ function initEditor(){
       'edit-mode','both','preview','fullscreen','outline','export','br'
     ],
     upload: { fieldName:'file', encoding:'base64', insertTo:2, linkToImgUrl:true },
-    input: (v)=>{},
+    input: (v)=>{ saveDraft(); },
     after: ()=>{ editorInited=true; if(editor&&pendingEditorValue!==''){ editor.setValue(pendingEditorValue); pendingEditorValue=''; } }
   };
   try {
@@ -565,6 +568,78 @@ function newFolder(){
   });
 }
 
+// ---------- 草稿自动保存（刷新后仍保留，参考 cp.802213.xyz）----------
+const DRAFT_KEY='wk_draft';
+function readDraft(){
+  try{ return JSON.parse(localStorage.getItem(DRAFT_KEY)||'null'); }catch(e){ return null; }
+}
+function saveDraft(){
+  if(activePage!=='write') return;
+  const d={ title:$('#title').value, date:$('#date').value, categories:$('#categories').value,
+    tags:$('#tags').value, editingPath, content:editor?editor.getValue():(pendingEditorValue||''), updatedAt:Date.now() };
+  try{ localStorage.setItem(DRAFT_KEY, JSON.stringify(d)); }catch(e){}
+}
+function clearDraft(){ try{ localStorage.removeItem(DRAFT_KEY); }catch(e){} }
+// 独立写作页初始化：从草稿恢复刷新前未保存的内容
+function initWritePage(){
+  const d=readDraft();
+  if(d&&(d.content||d.title)){
+    $('#title').value=d.title||'';
+    $('#date').value=d.date||new Date().toISOString().slice(0,10);
+    $('#categories').value=d.categories||'';
+    $('#tags').value=d.tags||'';
+    editingPath=d.editingPath||'';
+    if(editingPath){
+      $('#editorTitle').textContent='编辑：'+((d.title||'')||nameOf(editingPath));
+      $('#saveBtn').textContent='保存修改';
+    }
+    pendingEditorValue=d.content||'';
+    toast('已恢复刷新前的未发布草稿');
+  } else {
+    $('#date').value=new Date().toISOString().slice(0,10);
+  }
+  showPage('write');
+  initEditorOnce();
+  window.scrollTo(0,0);
+}
+
+// ---------- 写作页草稿自动保存（刷新后恢复，参考 cp.802213.xyz）----------
+// 仅「发布新文章」页（/admin/write）自动保存；编辑已有文章不覆盖草稿。
+const DRAFT_KEY='wk_draft_v1';
+function loadDraft(){
+  try{
+    const raw=localStorage.getItem(DRAFT_KEY);
+    if(!raw) return null;
+    const d=JSON.parse(raw);
+    return d&&typeof d==='object'?d:null;
+  }catch(e){ return null; }
+}
+function saveDraft(){
+  if(activePage!=='write'||editingPath) return;
+  const d={
+    title:$('#title').value,
+    date:$('#date').value,
+    tags:$('#tags').value,
+    categories:$('#categories').value,
+    content:editor?editor.getValue():'',
+    ts:Date.now()
+  };
+  try{ localStorage.setItem(DRAFT_KEY, JSON.stringify(d)); }catch(e){}
+}
+function clearDraft(){
+  try{ localStorage.removeItem(DRAFT_KEY); }catch(e){}
+}
+function restoreDraft(){
+  const d=loadDraft();
+  if(!d) return;
+  $('#title').value=d.title||'';
+  $('#date').value=(d.date||new Date().toISOString().slice(0,10)).slice(0,10);
+  $('#tags').value=d.tags||'';
+  $('#categories').value=d.categories||'';
+  if(d.content){ pendingEditorValue=d.content; $('#editorTitle').textContent='发布新文章（已恢复草稿）'; }
+  toast('已恢复上次未发布的草稿');
+}
+
 // ---------- init ----------
 function redirectLogin(){ location.replace('/admin/login'); }
 document.addEventListener('DOMContentLoaded', ()=>{
@@ -575,7 +650,14 @@ document.addEventListener('DOMContentLoaded', ()=>{
     .then(r=>r.json()).then(d=>{
       if(d.errno!==0||!d.data||d.data.type!=='administrator'){ redirectLogin(); return; }
       $('#userName').textContent=d.data.display_name||'管理员';
-      switchTab('manage');
+      if(window.__INITIAL__==='write'){
+        if(!loadDraft()) $('#date').value=new Date().toISOString().slice(0,10);
+        restoreDraft();
+        showPage('write');
+        initEditorOnce();
+      } else {
+        switchTab('manage');
+      }
     }).catch(()=>redirectLogin());
 
   $('#logoutBtn').onclick=()=>{
@@ -583,8 +665,14 @@ document.addEventListener('DOMContentLoaded', ()=>{
     try{ localStorage.removeItem('TOKEN'); }catch(e){}
     location.replace('/admin/login');
   };
-  $('#newBtn').onclick=newArticle;
+  $('#newBtn').onclick=()=>location.href='/admin/write';
   $('#saveBtn').onclick=savePost;
+  // 写作页表单：输入即自动保存草稿；关闭/刷新前兜底保存
+  ['title','date','tags','categories'].forEach(id=>{
+    const el=document.getElementById(id);
+    if(el) el.addEventListener('input',saveDraft);
+  });
+  window.addEventListener('beforeunload', saveDraft);
   $('#postList').addEventListener('click',onListClick);
   $('#commentList').addEventListener('click',onCommentAction);
   $$('#commentFilter .wk-btn').forEach(b=>b.onclick=()=>setCommentFilter(b.dataset.f));
@@ -602,8 +690,9 @@ document.addEventListener('DOMContentLoaded', ()=>{
 });
 `;
 
-export function renderAdminPage(siteUrl: string, ghRepo?: string): string {
+export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "manage"): string {
   const repo = String(ghRepo || "");
+  const INITIAL = initial === "write" ? "write" : "manage";
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -627,7 +716,7 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string): string {
   </div>
 </nav>
 
-<div class="wk-tabs">
+<div class="wk-tabs" ${INITIAL === "write" ? 'style="display:none"' : ""}>
   <button class="wk-tab active" data-tab="manage">管理文章</button>
   <button class="wk-tab" data-tab="comments">评论管理</button>
   <button class="wk-tab" data-tab="files">文件管理</button>
@@ -653,7 +742,7 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string): string {
       <div class="toolbar" style="justify-content:space-between;align-items:center">
         <h3 class="wk-title" style="margin:0;border:none;padding:0" id="editorTitle">发布新文章</h3>
         <div style="display:flex;gap:6px">
-          <button class="wk-btn ghost sm" onclick="backToManage()">← 返回管理文章</button>
+          <button class="wk-btn ghost sm" onclick="location.href='/admin/manage'">← 返回管理文章</button>
           <button class="wk-btn ghost sm" onclick="newArticle()">清空重写</button>
         </div>
       </div>
@@ -728,6 +817,7 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string): string {
 </div>
 
 <script src="${VDIRTOR_JS}"></script>
+<script>var __INITIAL__='${INITIAL}';</script>
 <script>${SCRIPT.replace(/__REPO__/g, repo)}</script>
 </body>
 </html>`;
