@@ -221,18 +221,6 @@ async function openEdit(path){
   window.scrollTo(0,0);
 }
 function nameOf(path){ return String(path||'').split('/').pop().replace(/\\.md$/,'')||'未命名'; }
-function newArticle(){
-  editingPath='';
-  $('#title').value=''; $('#date').value=new Date().toISOString().slice(0,10); $('#tags').value=''; $('#categories').value='';
-  $('#editorTitle').textContent='发布新文章';
-  $('#saveBtn').textContent='发布文章';
-  hideBuildBanner();
-  pendingEditorValue='';
-  clearDraft();
-  showPage('write');
-  initEditorOnce();
-  window.scrollTo(0,0);
-}
 function backToManage(){ showPage('manage'); loadPosts(); }
 
 async function savePost(){
@@ -262,7 +250,12 @@ async function delPost(path,name){
   if(!confirm('确认删除文章「'+name+'」？工作流将重建站点。')) return;
   const r=await api(API_BASE+'/post?path='+encodeURIComponent(path),{method:'DELETE'});
   if(r.status===401){ redirectLogin(); return; }
-  if(r.ok&&r.data&&r.data.ok){ toast('已删除'); loadPosts(); }
+  if(r.ok&&r.data&&r.data.ok){
+    toast('已删除');
+    loadPosts();
+    showBuildBanner('已删除「'+name+'」，部署工作流正在重建站点（约 40 秒），请稍候…');
+    pollBuild();
+  }
   else toast('删除失败：'+(r.data&&r.data.error||r.status),true);
 }
 
@@ -708,7 +701,6 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
         <h3 class="wk-title" style="margin:0;border:none;padding:0" id="editorTitle">发布新文章</h3>
         <div style="display:flex;gap:6px">
           <button class="wk-btn ghost sm" onclick="location.href='/admin/manage'">← 返回管理文章</button>
-          <button class="wk-btn ghost sm" onclick="newArticle()">清空重写</button>
         </div>
       </div>
       <label class="wk-label">标题</label>
