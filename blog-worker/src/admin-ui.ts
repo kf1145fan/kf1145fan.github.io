@@ -103,12 +103,6 @@ a{color:var(--accent);text-decoration:none}
 @media(prefers-color-scheme:dark){.msg.ok{color:#4ade80}}
 /* 部署历史 */
 /* 分类/标签历史建议（浏览器原生 datalist，可输入或选择） */
-/* 访问量统计：移动端横向滑动 */
-.stats-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;margin-bottom:12px}
-.stats{display:flex;gap:12px;min-width:max-content}
-.stat-card{background:var(--card);border:1px solid var(--border);border-radius:2px;padding:10px 18px;min-width:120px}
-.stat-card .num{font-size:20px;font-weight:700;color:var(--accent);line-height:1.3}
-.stat-card .lbl{font-size:11px;color:var(--muted)}
 /* 顶部标签栏：移动端横向滑动 */
 .wk-tabs{display:flex;gap:0;max-width:1080px;margin:14px auto 0;padding:0 16px;border-bottom:1px solid var(--border);overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none}
 .wk-tabs::-webkit-scrollbar{display:none}
@@ -178,15 +172,9 @@ function getToken(){
   return storage.get('TOKEN');
 }
 
-// ---------- tab（独立路由 /admin/xxx，SPA 切换不刷新页面）----------
+// ---------- tab（独立路由 /admin/xxx，SPA 切换：仅改地址栏，绝不刷新）----------
 const TAB_NAMES=['manage','comments','files','build','subscribe','write'];
 function showPage(name){ activePage=name; $$('.wk-page').forEach(p=>p.classList.toggle('hidden', p.id!=='page-'+name)); }
-// 从当前路径解析所在页面（未知一律回管理页）
-function pageFromPath(p){
-  const m=String(p||'').match(/^\/admin\/([^/?#]+)/);
-  const n=m?m[1]:'';
-  return TAB_NAMES.includes(n)?n:'manage';
-}
 // 进入写作页（新建/编辑共用）：首次初始化编辑器与草稿
 let writeInited=false;
 function enterWritePage(){
@@ -202,33 +190,22 @@ function enterWritePage(){
   showPage('write');
   window.scrollTo(0,0);
 }
-// 统一切换：更新 URL（默认 pushState，popstate 时 replace）并显示页面，不刷新
-function go(name,opts={}){
+// 统一切换：先显示页面，再更新地址栏（replaceState 不新增历史，稳定不刷新）
+function go(name){
   name=TAB_NAMES.includes(name)?name:'manage';
   $$('.wk-tab').forEach(t=>t.classList.toggle('active', t.dataset.tab===name));
-  if(opts.replace) history.replaceState(null,'','/admin/'+name);
-  else history.pushState(null,'','/admin/'+name);
-  if(name==='write'){ enterWritePage(); return; }
-  showPage(name);
-  if(name==='manage'){ loadPosts(); loadStats(); initBuildStatus(); }
-  if(name==='comments') loadComments();
-  if(name==='files') loadFiles();
-  if(name==='build') loadBuildHistory();
-  window.scrollTo(0,0);
+  if(name==='write'){ enterWritePage(); }
+  else {
+    showPage(name);
+    if(name==='manage'){ loadPosts(); initBuildStatus(); }
+    if(name==='comments') loadComments();
+    if(name==='files') loadFiles();
+    if(name==='build') loadBuildHistory();
+    window.scrollTo(0,0);
+  }
+  try{ history.replaceState(null,'','/admin/'+name); }catch(e){}
 }
 function switchTab(name){ go(name); }
-
-// 访问量统计：读取今日/总访问数（数据来自 /api/visit/stats）
-async function loadStats(){
-  try{
-    const r=await api('/api/visit/stats');
-    if(!r.ok) return;
-    const d=r.data||{};
-    const today=$('#statToday'), total=$('#statTotal');
-    if(today) today.textContent=(d.today==null?'-':d.today);
-    if(total) total.textContent=(d.total==null?'-':d.total);
-  }catch(e){}
-}
 
 // ---------- 管理文章 ----------
 // 用历史分类/标签填充输入框浏览器原生 datalist（可输入或从历史下拉选择）
@@ -755,7 +732,6 @@ document.addEventListener('DOMContentLoaded', ()=>{
         enterWritePage();
       } else {
         switchTab(window.__INITIAL__||'manage');
-        if((window.__INITIAL__||'manage')==='manage') initBuildStatus();
       }
     }).catch(()=>redirectLogin());
 
@@ -796,12 +772,6 @@ document.addEventListener('DOMContentLoaded', ()=>{
   $('#newFolderBtn').onclick=newFolder;
   loadBranches(true);
   $$('.wk-tab').forEach(t=>t.onclick=()=>switchTab(t.dataset.tab));
-  // 浏览器前进/后退：按路径切换页面，不刷新
-  window.addEventListener('popstate',()=>{
-    const name=pageFromPath(location.pathname);
-    if(name==='write'){ enterWritePage(); }
-    else go(name,{replace:true});
-  });
 });
 `;
 
@@ -845,10 +815,6 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
 
   <!-- 管理文章（默认首页） -->
   <div id="page-manage" class="wk-page">
-    <div class="stats-scroll"><div class="stats">
-      <div class="stat-card"><div class="num" id="statToday">-</div><div class="lbl">今日访问数</div></div>
-      <div class="stat-card"><div class="num" id="statTotal">-</div><div class="lbl">总访问量</div></div>
-    </div></div>
     <div id="buildBanner" class="build-banner hidden" style="margin-bottom:0"></div>
     <div class="wk-card">
       <div class="toolbar" style="justify-content:space-between;align-items:center">
