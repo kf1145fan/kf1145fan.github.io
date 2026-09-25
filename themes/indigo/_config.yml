@@ -167,10 +167,11 @@ since_year: 2015
 # 用户页面中作者相关的描述性文字，如不需要设为 false
 about: 用户页面中作者相关的描述性文字，如不需要设为 false
 
-# “不蒜子”访问量统计，详见 http://ibruce.info/2015/04/04/busuanzi/
+# 访问量统计（数据来自 blog-worker 的访问量接口；不需要可设为 false）
 visit_counter:
-  site_uv: 站点总访客数：
-  site_pv: 站点总访问量：
+  api:                # 接口地址，留空则使用站点 url（config.url）
+  today: 今日访问：
+  total: 总访问量：
 
 # 动态定义title
 title_change:

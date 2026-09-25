@@ -104,11 +104,20 @@ a{color:var(--accent);text-decoration:none}
 /* 部署历史 */
 /* 分类/标签历史建议（浏览器原生 datalist，可输入或选择） */
 /* 访问量统计卡片 */
-.stats-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+.stats-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;margin-bottom:12px}
 .stats{display:flex;gap:12px;min-width:max-content}
 .stat-card{background:var(--card);border:1px solid var(--border);border-radius:2px;padding:14px 22px;min-width:130px}
 .stat-card .num{font-size:22px;font-weight:700;color:var(--accent);line-height:1.3}
 .stat-card .lbl{font-size:11px;color:var(--muted)}
+/* 访问趋势折线图 */
+.chart-svg{max-width:100%}
+.chart-svg .cl-grid{stroke:var(--border);stroke-width:1}
+.chart-svg .cl-ytxt{fill:var(--muted);font-size:11px}
+.chart-svg .cl-xtxt{fill:var(--muted);font-size:11px}
+.chart-svg .cl-line{fill:none;stroke:var(--accent);stroke-width:2;stroke-linejoin:round;stroke-linecap:round}
+.chart-svg .cl-area{fill:var(--accent);opacity:.1;stroke:none}
+.chart-svg .cl-dot{fill:var(--accent)}
+@media(max-width:640px){.chart-svg .cl-ytxt,.chart-svg .cl-xtxt{font-size:15px}}
 /* 顶部标签栏：移动端横向滑动 */
 .wk-tabs{display:flex;gap:0;max-width:1080px;margin:14px auto 0;padding:0 16px;border-bottom:1px solid var(--border);overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none}
 .wk-tabs::-webkit-scrollbar{display:none}
@@ -207,25 +216,107 @@ function go(name){
     if(name==='comments') loadComments();
     if(name==='files') loadFiles();
     if(name==='build') loadBuildHistory();
-    if(name==='visit') loadStats();
+    if(name==='visit'){ loadVisit(); loadVisitSettings(); }
     window.scrollTo(0,0);
   }
   try{ history.replaceState(null,'','/admin/'+name); }catch(e){}
 }
 function switchTab(name){ go(name); }
 
-// 访问量统计：读取今日/总访问数（数据来自 /api/visit/stats）
-async function loadStats(){
-  const today=$('#statToday'), total=$('#statTotal');
-  if(today) today.textContent='-';
-  if(total) total.textContent='-';
+// ---------- 访问量（仅管理员可见）----------
+let visitDays = 30;
+
+// 折线图：用内联 SVG 绘制最近 N 天访问量
+function renderVisitChart(series){
+  const el = $('#visitChart');
+  if(!el) return;
+  if(!series || !series.length){ el.innerHTML = '<div class="empty">暂无数据</div>'; return; }
+  const W = 800, H = 260, padL = 46, padR = 16, padT = 16, padB = 30;
+  const iw = W - padL - padR, ih = H - padT - padB;
+  const n = series.length;
+  const max = Math.max(1, ...series.map(p => Number(p.count) || 0));
+  const X = i => padL + (n === 1 ? iw / 2 : iw * i / (n - 1));
+  const Y = v => padT + ih - ih * (v / max);
+  let grid = '';
+  for(let t = 0; t <= 4; t++){
+    const v = max * t / 4, yy = Y(v);
+    grid += '<line class="cl-grid" x1="'+padL+'" y1="'+yy.toFixed(1)+'" x2="'+(W-padR)+'" y2="'+yy.toFixed(1)+'"/>';
+    grid += '<text class="cl-ytxt" x="'+(padL-6)+'" y="'+(yy+3).toFixed(1)+'" text-anchor="end">'+Math.round(v)+'</text>';
+  }
+  const pts = series.map((p,i) => X(i).toFixed(1)+','+Y(Number(p.count)||0).toFixed(1)).join(' ');
+  const area = '<polygon class="cl-area" points="'+padL+','+(padT+ih)+' '+pts+' '+(W-padR)+','+(padT+ih)+'"/>';
+  const line = '<polyline class="cl-line" points="'+pts+'"/>';
+  let dots = '';
+  if(n <= 62){
+    dots = series.map((p,i) => '<circle class="cl-dot" cx="'+X(i).toFixed(1)+'" cy="'+Y(Number(p.count)||0).toFixed(1)+'" r="2.5"><title>'+esc(p.day)+'：'+esc(p.count)+'</title></circle>').join('');
+  }
+  const step = Math.ceil(n / 6);
+  let xl = '';
+  series.forEach((p,i) => {
+    if(i % step === 0 || i === n - 1){
+      xl += '<text class="cl-xtxt" x="'+X(i).toFixed(1)+'" y="'+(H-9)+'" text-anchor="middle">'+esc(String(p.day).slice(5))+'</text>';
+    }
+  });
+  el.innerHTML = '<svg viewBox="0 0 '+W+' '+H+'" class="chart-svg" style="width:100%;height:auto;display:block">'+grid+area+line+dots+xl+'</svg>';
+}
+
+// 读取今日/总访问量 + 最近 N 天趋势
+async function loadVisit(){
+  const today = $('#statToday'), total = $('#statTotal');
+  if(today) today.textContent = '-';
+  if(total) total.textContent = '-';
   try{
-    const r=await api('/api/visit/stats');
-    if(!r.ok) return;
-    const d=r.data||{};
-    if(today) today.textContent=(d.today==null?'-':d.today);
-    if(total) total.textContent=(d.total==null?'-':d.total);
+    const r = await api('/api/visit/stats');
+    if(r.ok){
+      const d = r.data || {};
+      if(today) today.textContent = (d.today == null ? '-' : d.today);
+      if(total) total.textContent = (d.total == null ? '-' : d.total);
+    }
   }catch(e){}
+  const chart = $('#visitChart'), sumEl = $('#visitRangeSum');
+  if(chart) chart.innerHTML = '<div class="empty">加载中...</div>';
+  try{
+    const r = await api('/admin/api/visit/daily?days=' + visitDays);
+    if(r.ok && r.data){
+      renderVisitChart(r.data.series || []);
+      if(sumEl) sumEl.textContent = (r.data.sum == null ? '-' : r.data.sum);
+    } else {
+      if(chart) chart.innerHTML = '<div class="empty">加载失败</div>';
+      if(sumEl) sumEl.textContent = '-';
+    }
+  }catch(e){
+    if(chart) chart.innerHTML = '<div class="empty">加载失败</div>';
+    if(sumEl) sumEl.textContent = '-';
+  }
+  const ld = $('#visitDaysLabel');
+  if(ld) ld.textContent = visitDays;
+}
+
+// 快捷按钮：7/30/90/365
+function setVisitDays(n){ visitDays = n; const i = $('#visitDays'); if(i) i.value = n; loadVisit(); }
+// 自定义天数
+function applyVisitDays(){
+  const i = $('#visitDays');
+  const n = parseInt((i && i.value) || '', 10);
+  if(!Number.isFinite(n) || n < 1 || n > 3650){ toast('显示天数需为 1-3650 的整数', true); return; }
+  visitDays = n; loadVisit();
+}
+
+// 数据保留天数（默认 365，可调）
+async function loadVisitSettings(){
+  try{
+    const r = await api('/admin/api/visit/settings');
+    const i = $('#retentionDays');
+    if(r.ok && r.data && i) i.value = r.data.retention_days;
+  }catch(e){}
+}
+async function saveVisitSettings(){
+  const i = $('#retentionDays');
+  const n = parseInt((i && i.value) || '', 10);
+  if(!Number.isFinite(n) || n < 1 || n > 3650){ toast('保留天数需为 1-3650 的整数', true); return; }
+  const r = await api('/admin/api/visit/settings', { method:'PUT', body: JSON.stringify({ retention_days: n }) });
+  if(r.ok) toast('已保存：数据保留 ' + n + ' 天');
+  else toast('保存失败' + (r.data && r.data.error ? '：' + r.data.error : ''), true);
 }
 
 // ---------- 管理文章 ----------
@@ -937,12 +1028,72 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
     </div>
   </div>
 
-  <!-- 访问量 -->
+  <!-- 访问量（仅管理员可见） -->
   <div id="page-visit" class="wk-page hidden">
     <div class="stats-scroll"><div class="stats">
       <div class="stat-card"><div class="num" id="statToday">-</div><div class="lbl">今日访问数</div></div>
       <div class="stat-card"><div class="num" id="statTotal">-</div><div class="lbl">总访问量</div></div>
     </div></div>
+
+    <div class="wk-card">
+      <h3 class="wk-title">访问趋势（最近 <span id="visitDaysLabel">30</span> 天）</h3>
+      <div class="filters" style="margin:0 0 10px">
+        <button class="wk-btn ghost sm" onclick="setVisitDays(7)">7 天</button>
+        <button class="wk-btn ghost sm" onclick="setVisitDays(30)">30 天</button>
+        <button class="wk-btn ghost sm" onclick="setVisitDays(90)">90 天</button>
+        <button class="wk-btn ghost sm" onclick="setVisitDays(365)">365 天</button>
+        <input class="wk-input" id="visitDays" type="number" min="1" max="3650" value="30" style="width:88px" placeholder="自定义">
+        <button class="wk-btn sm" onclick="applyVisitDays()">应用</button>
+      </div>
+      <div id="visitChart"><div class="empty">加载中...</div></div>
+      <p class="wk-label" style="margin:8px 0 0">图中区间合计：<b id="visitRangeSum">-</b>（仅展示所选天数，不改变数据保留策略）</p>
+    </div>
+
+    <div class="wk-card">
+      <h3 class="wk-title">数据保留</h3>
+      <p class="wk-label" style="margin-top:0">默认保留 365 天，可设置更长或更短；超期数据会自动清理。</p>
+      <div class="filters" style="margin:0">
+        <input class="wk-input" id="retentionDays" type="number" min="1" max="3650" style="width:110px" placeholder="365">
+        <span class="wk-label" style="margin:0">天</span>
+        <button class="wk-btn sm" onclick="saveVisitSettings()">保存</button>
+      </div>
+    </div>
+
+    <div class="wk-card">
+      <h3 class="wk-title">API 说明</h3>
+      <ul class="wk-list">
+        <li>
+          <div>
+            <div class="name"><span class="chip">POST</span> /api/visit</div>
+            <div class="meta">记录一次访问（前台调用）。同一访客同一天只计一次，刷新不重复。返回 {ok, counted, today, total}</div>
+          </div>
+        </li>
+        <li>
+          <div>
+            <div class="name"><span class="chip">GET</span> /api/visit/stats</div>
+            <div class="meta">查询访问量。返回 {ok, today, total}，today 按东八区计算</div>
+          </div>
+        </li>
+        <li>
+          <div>
+            <div class="name"><span class="chip">GET</span> /admin/api/visit/daily?days=30</div>
+            <div class="meta">按天趋势（需管理员登录）。days 取值 1-3650，返回 {ok, days, sum, series:[{day,count}]}</div>
+          </div>
+        </li>
+        <li>
+          <div>
+            <div class="name"><span class="chip">GET</span> /admin/api/visit/settings</div>
+            <div class="meta">读取数据保留天数（需管理员登录）。返回 {ok, retention_days}</div>
+          </div>
+        </li>
+        <li>
+          <div>
+            <div class="name"><span class="chip">PUT</span> /admin/api/visit/settings</div>
+            <div class="meta">保存数据保留天数（需管理员登录）。请求体 {"retention_days": 365}，取值 1-3650</div>
+          </div>
+        </li>
+      </ul>
+    </div>
   </div>
 
   <!-- 订阅管理（空界面，功能开发中） -->

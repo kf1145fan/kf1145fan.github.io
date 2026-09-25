@@ -1,10 +1,30 @@
 <% if (theme.visit_counter) { %>
 <p>
-    <span id="busuanzi_container_site_uv">
-        <%- theme.visit_counter.site_uv %><span id="busuanzi_value_site_uv">114514</span>
-    </span>
-    <span id="busuanzi_container_site_pv">
-        <%- theme.visit_counter.site_pv %><span id="busuanzi_value_site_pv">114514</span>
-    </span>
+    <span><%- theme.visit_counter.today %><span id="wl_visit_today">-</span></span>
+    <span><%- theme.visit_counter.total %><span id="wl_visit_total">-</span></span>
 </p>
+<script>
+(function () {
+    var API = ('<%- theme.visit_counter.api || config.url %>' || '').replace(/\/+$/, '');
+    if (!API) { return; }
+    function render(d) {
+        if (!d) { return; }
+        var t = document.getElementById('wl_visit_today');
+        var s = document.getElementById('wl_visit_total');
+        if (t && d.today != null) { t.textContent = d.today; }
+        if (s && d.total != null) { s.textContent = d.total; }
+    }
+    // 上报一次访问：同一访客同一天只计一次，刷新不会重复增加；接口会回传最新数值
+    fetch(API + '/api/visit', { method: 'POST', keepalive: true })
+        .then(function (r) { return r.json(); })
+        .then(function (d) { if (d && d.ok) { render(d); } })
+        .catch(function () {
+            // 上报失败时退化为只读查询
+            fetch(API + '/api/visit/stats')
+                .then(function (r) { return r.json(); })
+                .then(render)
+                .catch(function () {});
+        });
+})();
+</script>
 <% } %>

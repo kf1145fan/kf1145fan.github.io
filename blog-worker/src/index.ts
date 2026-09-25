@@ -63,32 +63,55 @@ const visitJson = (body: unknown, status = 200) =>
     headers: { "content-type": "application/json; charset=utf-8", ...VISIT_CORS },
   });
 
-// 今日日期按东八区（Asia/Shanghai）计算，格式 YYYY-MM-DD
-function visitDay(): string {
-  return new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+// 日期按东八区（Asia/Shanghai）计算，格式 YYYY-MM-DD；offsetDays 表示往前推几天
+function visitDay(offsetDays = 0): string {
+  const t = Date.now() + 8 * 3600 * 1000 - offsetDays * 86400000;
+  return new Date(t).toISOString().slice(0, 10);
 }
 
-// 确保 wl_Visit 表存在（自愈：CI 的 D1 迁移可能因令牌权限失败，此处按需建表）
-let visitTableReady: Promise<unknown> | null = null;
-function ensureVisitTable(db: D1Database): Promise<unknown> {
-  if (!visitTableReady) {
-    visitTableReady = db
-      .prepare(
-        `CREATE TABLE IF NOT EXISTS "wl_Visit" ("day" TEXT PRIMARY KEY, "count" INTEGER NOT NULL DEFAULT 0)`
-      )
-      .run()
+// 数据默认保留 365 天（可在后台「访问量」页调整）
+const VISIT_DEFAULT_RETENTION = 365;
+
+// 确保访问量表存在（自愈：CI 的 D1 迁移可能因令牌权限失败，此处按需建表）
+let visitTablesReady: Promise<unknown> | null = null;
+function ensureVisitTables(db: D1Database): Promise<unknown> {
+  if (!visitTablesReady) {
+    visitTablesReady = db
+      .batch([
+        db.prepare(
+          `CREATE TABLE IF NOT EXISTS "wl_Visit" ("day" TEXT PRIMARY KEY, "count" INTEGER NOT NULL DEFAULT 0)`
+        ),
+        db.prepare(
+          `CREATE TABLE IF NOT EXISTS "wl_VisitVisitor" ("day" TEXT NOT NULL, "visitor" TEXT NOT NULL, PRIMARY KEY("day","visitor"))`
+        ),
+      ])
       .catch((e) => {
-        visitTableReady = null;
+        visitTablesReady = null;
         throw e;
       });
   }
-  return visitTableReady;
+  return visitTablesReady;
+}
+
+// 读取数据保留天数（存于 wl_Settings，默认 365）
+async function visitRetention(db: D1Database): Promise<number> {
+  try {
+    const row = await db
+      .prepare(`SELECT "value" FROM "wl_Settings" WHERE "key"=?1`)
+      .bind("visit_retention_days")
+      .first<{ value: string }>();
+    const n = parseInt(row?.value ?? "", 10);
+    if (Number.isFinite(n) && n >= 1 && n <= 3650) return n;
+  } catch (e) {
+    /* wl_Settings 不存在等情况忽略，用默认值 */
+  }
+  return VISIT_DEFAULT_RETENTION;
 }
 
 // 读取今日/总访问量
 async function visitStats(db: D1Database) {
   const day = visitDay();
-  await ensureVisitTable(db);
+  await ensureVisitTables(db);
   const row = await db
     .prepare(
       `SELECT (SELECT "count" FROM "wl_Visit" WHERE "day"=?1) AS today,
@@ -97,6 +120,53 @@ async function visitStats(db: D1Database) {
     .bind(day)
     .first<{ today: number | null; total: number }>();
   return { today: row?.today ?? 0, total: row?.total ?? 0 };
+}
+
+// 最近 days 天的访问趋势（缺失日期补 0）
+async function visitDaily(db: D1Database, days: number) {
+  await ensureVisitTables(db);
+  const from = visitDay(days - 1);
+  const rows = await db
+    .prepare(`SELECT "day","count" FROM "wl_Visit" WHERE "day">=?1 ORDER BY "day" ASC`)
+    .bind(from)
+    .all<{ day: string; count: number }>();
+  const map = new Map<string, number>();
+  (rows.results || []).forEach((r) => map.set(r.day, r.count));
+  const series: { day: string; count: number }[] = [];
+  for (let i = days - 1; i >= 0; i--) {
+    const d = visitDay(i);
+    series.push({ day: d, count: map.get(d) ?? 0 });
+  }
+  return series;
+}
+
+// 过期数据清理：同一隔离实例每天最多执行一次
+let lastCleanupDay = "";
+async function visitCleanup(db: D1Database) {
+  const today = visitDay();
+  if (lastCleanupDay === today) return;
+  lastCleanupDay = today;
+  try {
+    const retention = await visitRetention(db);
+    const cutoff = visitDay(retention - 1);
+    await db.batch([
+      db.prepare(`DELETE FROM "wl_Visit" WHERE "day"<?1`).bind(cutoff),
+      db.prepare(`DELETE FROM "wl_VisitVisitor" WHERE "day"<?1`).bind(cutoff),
+    ]);
+  } catch (e) {
+    console.error("visit cleanup failed", e);
+  }
+}
+
+// 访客标识：IP + UA 的 SHA-256（同一访客当天只计一次）
+async function visitorId(c: { req: { header: (k: string) => string | undefined } }): Promise<string> {
+  const ip = c.req.header("cf-connecting-ip") || c.req.header("x-forwarded-for") || "";
+  const ua = c.req.header("user-agent") || "";
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(ip + "|" + ua));
+  return Array.from(new Uint8Array(buf))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("")
+    .slice(0, 32);
 }
 
 // 预检
@@ -113,20 +183,34 @@ app.get("/api/visit/stats", async (c) => {
   }
 });
 
-// 记录一次访问：POST /api/visit
+// 记录一次访问：POST /api/visit（同一访客同一天只计一次，刷新不重复计数）
 app.post("/api/visit", async (c) => {
   const db = (c.env as Bindings).DB;
   const day = visitDay();
   try {
-    await db
-      .prepare(
-        `INSERT INTO "wl_Visit" ("day","count") VALUES (?1,1)
-         ON CONFLICT("day") DO UPDATE SET "count"="count"+1`
-      )
-      .bind(day)
+    await ensureVisitTables(db);
+    const vid = await visitorId(c);
+    const ins = await db
+      .prepare(`INSERT OR IGNORE INTO "wl_VisitVisitor" ("day","visitor") VALUES (?1,?2)`)
+      .bind(day, vid)
       .run();
+    const counted = ((ins.meta as { changes?: number } | undefined)?.changes ?? 0) > 0;
+    if (counted) {
+      await db
+        .prepare(
+          `INSERT INTO "wl_Visit" ("day","count") VALUES (?1,1)
+           ON CONFLICT("day") DO UPDATE SET "count"="count"+1`
+        )
+        .bind(day)
+        .run();
+    }
+    try {
+      c.executionCtx.waitUntil(visitCleanup(db));
+    } catch (e) {
+      /* 无 executionCtx 时忽略 */
+    }
     const s = await visitStats(db);
-    return visitJson({ ok: true, ...s });
+    return visitJson({ ok: true, counted, ...s });
   } catch (e) {
     console.error("visit record failed", e);
     return visitJson({ ok: false, today: 0, total: 0 });
@@ -181,6 +265,47 @@ app.post("/admin/api/build/trigger", async (c) => {
 app.get("/admin/api/build/history", async (c) => {
   if (!isAdmin(c.get("userInfo"))) return json({ error: "unauthorized" }, 401);
   return handleBuildHistory(c.env as Bindings);
+});
+
+// ---------- 访问量（仅管理员可见）----------
+// 最近 N 天趋势：/admin/api/visit/daily?days=30
+app.get("/admin/api/visit/daily", async (c) => {
+  if (!isAdmin(c.get("userInfo"))) return json({ error: "unauthorized" }, 401);
+  const raw = parseInt(c.req.query("days") || "30", 10);
+  const days = Number.isFinite(raw) ? Math.min(Math.max(raw, 1), 3650) : 30;
+  try {
+    const series = await visitDaily((c.env as Bindings).DB, days);
+    return json({ ok: true, days, series, sum: series.reduce((a, b) => a + b.count, 0) });
+  } catch (e) {
+    return json({ ok: false, error: String(e) }, 500);
+  }
+});
+
+// 读取设置：/admin/api/visit/settings
+app.get("/admin/api/visit/settings", async (c) => {
+  if (!isAdmin(c.get("userInfo"))) return json({ error: "unauthorized" }, 401);
+  return json({ ok: true, retention_days: await visitRetention((c.env as Bindings).DB) });
+});
+
+// 保存设置：/admin/api/visit/settings（数据保留天数，1-3650）
+app.put("/admin/api/visit/settings", async (c) => {
+  if (!isAdmin(c.get("userInfo"))) return json({ error: "unauthorized" }, 401);
+  const body = (await c.req.json().catch(() => ({}))) as { retention_days?: unknown };
+  const n = parseInt(String(body?.retention_days ?? ""), 10);
+  if (!Number.isFinite(n) || n < 1 || n > 3650) {
+    return json({ error: "retention_days 需为 1-3650 的整数" }, 400);
+  }
+  try {
+    await (c.env as Bindings).DB.prepare(
+      `INSERT INTO "wl_Settings" ("key","value","updatedAt") VALUES (?1,?2,datetime('now'))
+       ON CONFLICT("key") DO UPDATE SET "value"=?2, "updatedAt"=datetime('now')`
+    )
+      .bind("visit_retention_days", String(n))
+      .run();
+    return json({ ok: true, retention_days: n });
+  } catch (e) {
+    return json({ ok: false, error: String(e) }, 500);
+  }
 });
 
 // ---------- 文件管理（GitHub Contents API）----------
