@@ -184,6 +184,11 @@ function wireTaxonomySuggest(d){
   if(cl){ cl.innerHTML=''; ac.forEach(x=>{ const o=document.createElement('option'); o.value=x; cl.appendChild(o); }); }
   if(tl){ tl.innerHTML=''; at.forEach(x=>{ const o=document.createElement('option'); o.value=x; tl.appendChild(o); }); }
 }
+// 独立拉取历史分类/标签，填充写作页下拉建议（管理页由 loadPosts 调用；写作页单独调用）
+async function loadTaxonomySuggest(){
+  const r=await api(API_BASE+'/posts');
+  if(r.ok&&r.data) wireTaxonomySuggest(r.data);
+}
 async function loadPosts(){
   const list = $('#postList'); if(!list) return;
   list.innerHTML = '<li class="empty">加载中...</li>';
@@ -697,6 +702,7 @@ document.addEventListener('DOMContentLoaded', ()=>{
         restoreDraft();
         showPage('write');
         initEditorOnce();
+        loadTaxonomySuggest();
       } else {
         switchTab('manage');
         initBuildStatus();
@@ -709,7 +715,6 @@ document.addEventListener('DOMContentLoaded', ()=>{
     location.replace('/admin/login');
   };
   $('#newBtn').onclick=()=>location.href='/admin/write';
-  $('#triggerBtn') && ($('#triggerBtn').onclick=triggerBuild);
   $('#saveBtn').onclick=savePost;
   // 写作页表单：输入即自动保存草稿；关闭/刷新前兜底保存
   ['title','date','tags','categories'].forEach(id=>{
@@ -775,10 +780,7 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
     <div class="wk-card">
       <div class="toolbar" style="justify-content:space-between;align-items:center">
         <h3 class="wk-title" style="margin:0;border:none;padding:0">已有文章</h3>
-        <div style="display:flex;gap:6px">
-          <button class="wk-btn act sm" id="triggerBtn" title="改完文章或文件后手动触发部署工作流，重建整个站点">▶ 运行工作流</button>
-          <button class="wk-btn sm" id="newBtn">＋ 添加新文章</button>
-        </div>
+        <button class="wk-btn sm" id="newBtn">＋ 添加新文章</button>
       </div>
       <ul class="wk-list" id="postList"><li class="empty">加载中...</li></ul>
     </div>
