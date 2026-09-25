@@ -251,24 +251,34 @@ async function savePost(){
   $('#saveBtn').disabled=false; $('#saveBtn').textContent=isUpd?'保存修改':'发布文章';
   if(r.status===401){ redirectLogin(); return; }
   if(r.ok&&r.data&&r.data.ok){
-    toast(isUpd?'保存成功，工作流将重建站点':'发布成功，工作流将重建站点');
+    toast(isUpd?'保存成功，已触发部署':'发布成功，已触发部署');
     clearDraft();
-    showBuildBanner('已推送到 GitHub，部署工作流正在重建站点（约 40 秒），请稍候…');
-    pollBuild();
+    await launchDeploy('已发布，部署工作流正在重建站点…');
     location.href='/admin/manage';
   } else toast('保存失败：'+(r.data&&r.data.error||r.status),true);
 }
 async function delPost(path,name){
-  if(!confirm('确认删除文章「'+name+'」？工作流将重建站点。')) return;
+  if(!confirm('确认删除文章「'+name+'」？')) return;
   const r=await api(API_BASE+'/post?path='+encodeURIComponent(path),{method:'DELETE'});
   if(r.status===401){ redirectLogin(); return; }
   if(r.ok&&r.data&&r.data.ok){
     toast('已删除');
     loadPosts();
-    showBuildBanner('已删除「'+name+'」，部署工作流正在重建站点（约 40 秒），请稍候…');
-    pollBuild();
+    await launchDeploy('已删除「'+name+'」，工作流正在重建站点…');
   }
   else toast('删除失败：'+(r.data&&r.data.error||r.status),true);
+}
+// 触发部署工作流并轮询进度（保存/删除文章时自动发布；文件保存不调用）
+async function launchDeploy(msg){
+  const r=await api(API_BASE+'/build/trigger',{method:'POST'});
+  if(r.ok&&r.data&&r.data.ok){
+    showBuildBanner(msg||'已触发部署工作流，正在重建站点…');
+    setTimeout(pollBuild, 3000);
+    return true;
+  } else {
+    showBuildBanner('代码已推送到 GitHub，但自动触发部署失败，请点「运行工作流」手动部署','err');
+    return false;
+  }
 }
 
 // ---------- Vditor「分屏复杂模式」----------
@@ -378,6 +388,15 @@ async function onCommentAction(e){
 
 // ---------- 构建状态横幅 ----------
 let buildTimer=null;
+// 进入管理页时：若已有构建在跑，则显示进度横幅并开始轮询（此前刚发布/删除会跳到这里）
+async function initBuildStatus(){
+  const r=await api(API_BASE+'/build');
+  const d=r.data||{};
+  if(r.ok&&d&&d.running){
+    showBuildBanner('部署工作流正在重建站点…');
+    pollBuild();
+  }
+}
 function showBuildBanner(msg, cls){
   [$('#buildBanner'), $('#buildBannerBuild')].forEach((b)=>{
     if(!b) return;
@@ -597,7 +616,7 @@ async function saveFileEdit(){
   const r=await api(API_BASE+'/file',{method:'PUT',body:JSON.stringify({path:fileEditPath,content,branch:curBranch()})});
   if(r.status===401){ redirectLogin(); return; }
   if(r.ok&&r.data&&r.data.ok){
-    toast('已保存 '+fileEditPath);
+    toast('已保存到 GitHub 仓库，如需部署请点击「运行工作流」');
     $('#fileEditor').classList.add('hidden');
     loadFiles();
   } else toast('保存失败：'+(r.data&&r.data.error||r.status),true);
@@ -680,6 +699,7 @@ document.addEventListener('DOMContentLoaded', ()=>{
         initEditorOnce();
       } else {
         switchTab('manage');
+        initBuildStatus();
       }
     }).catch(()=>redirectLogin());
 

@@ -1,9 +1,7 @@
 name: Deploy Blog
 
 on:
-  push:
-    branches:
-      - main
+  # 仅手动触发部署（「运行工作流」按钮或 GitHub 手动 Run），不再随 push 自动部署
   workflow_dispatch:
 
 permissions:
