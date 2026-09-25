@@ -50,6 +50,11 @@ app.get("/api/health", async (c) => {
   });
 });
 
+// ---------- 3.5 访问量统计 API（占位：仅返回结构，后续接入统计后返回真实数据）----------
+app.get("/api/visit/stats", async (c) => {
+  return json({ ok: true, today: 0, total: 0 });
+});
+
 // ---------- 4. 文章管理 API（需 Waline 管理员 JWT）----------
 app.use("/admin/api/*", auth);
 

@@ -102,16 +102,21 @@ a{color:var(--accent);text-decoration:none}
 .msg{font-size:12px;min-height:18px}.msg.err{color:var(--danger)}.msg.ok{color:#1a7f37}
 @media(prefers-color-scheme:dark){.msg.ok{color:#4ade80}}
 /* 部署历史 */
-/* 分类/标签历史建议（移动端 datalist 不生效，用可点击 chip） */
-.suggest{display:flex;flex-wrap:wrap;gap:4px;align-items:center;margin:4px 0 2px;min-height:16px}
-.suggest-label{color:var(--muted);font-size:11px;margin-right:2px}
-.chipOpt{display:inline-block;font-size:11px;color:var(--accent);background:rgba(249,115,22,.1);border:1px solid rgba(249,115,22,.3);border-radius:10px;padding:1px 8px;cursor:pointer;user-select:none;-webkit-tap-highlight-color:transparent}
-.chipOpt:active{background:rgba(249,115,22,.25)}
+/* 分类/标签历史建议（浏览器原生 datalist，可输入或选择） */
+/* 访问量统计：移动端横向滑动 */
+.stats-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;margin-bottom:12px}
+.stats{display:flex;gap:12px;min-width:max-content}
+.stat-card{background:var(--card);border:1px solid var(--border);border-radius:2px;padding:10px 18px;min-width:120px}
+.stat-card .num{font-size:20px;font-weight:700;color:var(--accent);line-height:1.3}
+.stat-card .lbl{font-size:11px;color:var(--muted)}
+/* 顶部标签栏：移动端横向滑动 */
+.wk-tabs{display:flex;gap:0;max-width:1080px;margin:14px auto 0;padding:0 16px;border-bottom:1px solid var(--border);overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+.wk-tabs::-webkit-scrollbar{display:none}
+.wk-tab{padding:8px 16px;font-size:13px;border:none;background:transparent;color:var(--muted);cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap;flex:0 0 auto}
 /* 部署记录表格：移动端横向滚动 */
 .table-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
 .wk-build-table{width:100%;border-collapse:collapse;font-size:12px;min-width:600px}
 .wk-build-table th,.wk-build-table td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--border);vertical-align:middle;white-space:nowrap}
-.wk-build-table th{color:var(--muted);font-weight:500}
 .wk-build-table code{background:var(--hover);padding:1px 5px;border-radius:2px;font-size:11px}
 .wk-badge{display:inline-block;font-size:11px;padding:1px 8px;border-radius:2px;white-space:nowrap}
 .wk-badge.success{background:#d1f5d3;color:#147d19}
@@ -178,38 +183,31 @@ function showPage(name){ activePage=name; $$('.wk-page').forEach(p=>p.classList.
 function switchTab(name){
   $$('.wk-tab').forEach(t=>t.classList.toggle('active', t.dataset.tab===name));
   showPage(name);
-  if(name==='manage') loadPosts();
+  if(name==='manage'){ loadPosts(); loadStats(); }
   if(name==='comments') loadComments();
   if(name==='files') loadFiles();
   if(name==='build') loadBuildHistory();
 }
 
+// 访问量统计：读取今日/总访问数（数据来自 /api/visit/stats）
+async function loadStats(){
+  try{
+    const r=await api('/api/visit/stats');
+    if(!r.ok) return;
+    const d=r.data||{};
+    const today=$('#statToday'), total=$('#statTotal');
+    if(today) today.textContent=(d.today==null?'-':d.today);
+    if(total) total.textContent=(d.total==null?'-':d.total);
+  }catch(e){}
+}
+
 // ---------- 管理文章 ----------
-// 用历史分类/标签填充输入框下拉建议 + 可点击 chip（移动端也能用）
+// 用历史分类/标签填充输入框浏览器原生 datalist（可输入或从历史下拉选择）
 function wireTaxonomySuggest(d){
   const ac=d&&d.allCategories||[], at=d&&d.allTags||[];
   const cl=$('#catList'), tl=$('#tagList');
   if(cl){ cl.innerHTML=''; ac.forEach(x=>{ const o=document.createElement('option'); o.value=x; cl.appendChild(o); }); }
   if(tl){ tl.innerHTML=''; at.forEach(x=>{ const o=document.createElement('option'); o.value=x; tl.appendChild(o); }); }
-  renderSuggestChips('catSuggest', ac, 'categories');
-  renderSuggestChips('tagSuggest', at, 'tags');
-}
-// 渲染可点击历史项：点击把该项追加到对应输入框（逗号分隔）
-function renderSuggestChips(containerId, arr, inputId){
-  const c=$(containerId); if(!c) return;
-  c.innerHTML='';
-  (arr||[]).forEach(x=>{
-    const sp=document.createElement('span');
-    sp.className='chipOpt'; sp.textContent=x;
-    sp.onclick=()=>{
-      const inp=$(inputId); if(!inp) return;
-      const cur=inp.value.split(/[,，]/).map(s=>s.trim()).filter(Boolean);
-      if(cur.indexOf(x)===-1) cur.push(x);
-      inp.value=cur.join('，');
-      inp.focus();
-    };
-    c.appendChild(sp);
-  });
 }
 // 独立拉取历史分类/标签，填充写作页下拉建议（管理页由 loadPosts 调用；写作页单独调用）
 async function loadTaxonomySuggest(){
@@ -798,12 +796,17 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
   <button class="wk-tab" data-tab="comments">评论管理</button>
   <button class="wk-tab" data-tab="files">文件管理</button>
   <button class="wk-tab" data-tab="build">部署记录</button>
+  <button class="wk-tab" data-tab="subscribe">订阅管理</button>
 </div>
 
 <div class="wk-wrap">
 
   <!-- 管理文章（默认首页） -->
   <div id="page-manage" class="wk-page">
+    <div class="stats-scroll"><div class="stats">
+      <div class="stat-card"><div class="num" id="statToday">-</div><div class="lbl">今日访问数</div></div>
+      <div class="stat-card"><div class="num" id="statTotal">-</div><div class="lbl">总访问量</div></div>
+    </div></div>
     <div id="buildBanner" class="build-banner hidden" style="margin-bottom:0"></div>
     <div class="wk-card">
       <div class="toolbar" style="justify-content:space-between;align-items:center">
@@ -827,8 +830,8 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
       <input class="wk-input" id="title" placeholder="文章标题">
       <div class="wk-row">
         <div class="wk-field"><label class="wk-label">日期</label><input class="wk-input" type="date" id="date"></div>
-        <div class="wk-field"><label class="wk-label">分类</label><input class="wk-input" id="categories" list="catList" placeholder="多个用逗号分开"><div class="suggest"><span class="suggest-label">常用</span><span id="catSuggest"></span></div></div>
-        <div class="wk-field"><label class="wk-label">标签</label><input class="wk-input" id="tags" list="tagList" placeholder="多个用逗号分开"><div class="suggest"><span class="suggest-label">常用</span><span id="tagSuggest"></span></div></div>
+        <div class="wk-field"><label class="wk-label">分类</label><input class="wk-input" id="categories" list="catList" placeholder="可输入或从历史下拉选择，多个用逗号分开"></div>
+        <div class="wk-field"><label class="wk-label">标签</label><input class="wk-input" id="tags" list="tagList" placeholder="可输入或从历史下拉选择，多个用逗号分开"></div>
       </div>
       <datalist id="catList"></datalist>
       <datalist id="tagList"></datalist>
@@ -901,6 +904,14 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
       </div>
       <p class="wk-label" style="margin-top:0">改完文件后点「运行工作流」即可手动触发部署，无需推送代码。点击「查看日志」可跳转 GitHub Actions 查看完整构建日志。</p>
       <div class="table-scroll"><div id="buildHistory" class="empty">加载中...</div></div>
+    </div>
+  </div>
+
+  <!-- 订阅管理（空界面，功能开发中） -->
+  <div id="page-subscribe" class="wk-page hidden">
+    <div class="wk-card">
+      <h3 class="wk-title" style="margin:0 0 12px">订阅管理</h3>
+      <div class="empty">订阅管理功能建设中，敬请期待。</div>
     </div>
   </div>
 
