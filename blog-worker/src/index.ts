@@ -167,6 +167,14 @@ app.get("/admin/manage", (c) => adminPage(c, "manage"));
 app.get("/admin/manage/", (c) => adminPage(c, "manage"));
 app.get("/admin/write", (c) => adminPage(c, "write"));
 app.get("/admin/write/", (c) => adminPage(c, "write"));
+app.get("/admin/comments", (c) => adminPage(c, "comments"));
+app.get("/admin/comments/", (c) => adminPage(c, "comments"));
+app.get("/admin/files", (c) => adminPage(c, "files"));
+app.get("/admin/files/", (c) => adminPage(c, "files"));
+app.get("/admin/build", (c) => adminPage(c, "build"));
+app.get("/admin/build/", (c) => adminPage(c, "build"));
+app.get("/admin/subscribe", (c) => adminPage(c, "subscribe"));
+app.get("/admin/subscribe/", (c) => adminPage(c, "subscribe"));
 
 // ---------- 6. 其余路径：反向代理 GitHub Pages 静态站点 ----------
 app.all("*", async (c) => {

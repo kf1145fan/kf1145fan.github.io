@@ -178,16 +178,45 @@ function getToken(){
   return storage.get('TOKEN');
 }
 
-// ---------- tab ----------
+// ---------- tab（独立路由 /admin/xxx，SPA 切换不刷新页面）----------
+const TAB_NAMES=['manage','comments','files','build','subscribe','write'];
 function showPage(name){ activePage=name; $$('.wk-page').forEach(p=>p.classList.toggle('hidden', p.id!=='page-'+name)); }
-function switchTab(name){
+// 从当前路径解析所在页面（未知一律回管理页）
+function pageFromPath(p){
+  const m=String(p||'').match(/^\/admin\/([^/?#]+)/);
+  const n=m?m[1]:'';
+  return TAB_NAMES.includes(n)?n:'manage';
+}
+// 进入写作页（新建/编辑共用）：首次初始化编辑器与草稿
+let writeInited=false;
+function enterWritePage(){
+  if(!writeInited){
+    writeInited=true;
+    if(!editingPath){
+      if(!loadDraft()) $('#date').value=new Date().toISOString().slice(0,10);
+      restoreDraft();
+    }
+    initEditorOnce();
+    loadTaxonomySuggest();
+  }
+  showPage('write');
+  window.scrollTo(0,0);
+}
+// 统一切换：更新 URL（默认 pushState，popstate 时 replace）并显示页面，不刷新
+function go(name,opts={}){
+  name=TAB_NAMES.includes(name)?name:'manage';
   $$('.wk-tab').forEach(t=>t.classList.toggle('active', t.dataset.tab===name));
+  if(opts.replace) history.replaceState(null,'','/admin/'+name);
+  else history.pushState(null,'','/admin/'+name);
+  if(name==='write'){ enterWritePage(); return; }
   showPage(name);
-  if(name==='manage'){ loadPosts(); loadStats(); }
+  if(name==='manage'){ loadPosts(); loadStats(); initBuildStatus(); }
   if(name==='comments') loadComments();
   if(name==='files') loadFiles();
   if(name==='build') loadBuildHistory();
+  window.scrollTo(0,0);
 }
+function switchTab(name){ go(name); }
 
 // 访问量统计：读取今日/总访问数（数据来自 /api/visit/stats）
 async function loadStats(){
@@ -258,13 +287,12 @@ async function openEdit(path){
   $('#saveBtn').textContent='保存修改';
   hideBuildBanner();
   pendingEditorValue=p.body||'';
-  showPage('write');
+  go('write');
   initEditorOnce();
   loadTaxonomySuggest(); // 编辑页也需要分类/标签历史建议（SPA 切换不会重新加载页面）
-  window.scrollTo(0,0);
 }
 function nameOf(path){ return String(path||'').split('/').pop().replace(/\\.md$/,'')||'未命名'; }
-function backToManage(){ showPage('manage'); loadPosts(); }
+function backToManage(){ go('manage'); }
 
 async function savePost(){
   const title=$('#title').value.trim();
@@ -285,7 +313,7 @@ async function savePost(){
     toast(isUpd?'保存成功，已触发部署':'发布成功，已触发部署');
     clearDraft();
     await launchDeploy('已发布，部署工作流正在重建站点…');
-    location.href='/admin/manage';
+    go('manage');
   } else toast('保存失败：'+(r.data&&r.data.error||r.status),true);
 }
 async function delPost(path,name){
@@ -724,14 +752,10 @@ document.addEventListener('DOMContentLoaded', ()=>{
       if(d.errno!==0||!d.data||d.data.type!=='administrator'){ redirectLogin(); return; }
       $('#userName').textContent=d.data.display_name||'管理员';
       if(window.__INITIAL__==='write'){
-        if(!loadDraft()) $('#date').value=new Date().toISOString().slice(0,10);
-        restoreDraft();
-        showPage('write');
-        initEditorOnce();
-        loadTaxonomySuggest();
+        enterWritePage();
       } else {
-        switchTab('manage');
-        initBuildStatus();
+        switchTab(window.__INITIAL__||'manage');
+        if((window.__INITIAL__||'manage')==='manage') initBuildStatus();
       }
     }).catch(()=>redirectLogin());
 
@@ -740,7 +764,17 @@ document.addEventListener('DOMContentLoaded', ()=>{
     try{ localStorage.removeItem('TOKEN'); }catch(e){}
     location.replace('/admin/login');
   };
-  $('#newBtn').onclick=()=>location.href='/admin/write';
+  // 新建文章：重置表单后 SPA 进入写作页（不刷新）
+  $('#newBtn').onclick=()=>{
+    editingPath='';
+    ['title','date','tags','categories'].forEach(id=>{ const el=document.getElementById(id); if(el) el.value=''; });
+    $('#date').value=new Date().toISOString().slice(0,10);
+    $('#editorTitle').textContent='发布新文章';
+    $('#saveBtn').textContent='发布文章';
+    pendingEditorValue='';
+    try{ if(editor) editor.setValue(''); }catch(e){}
+    go('write');
+  };
   $('#saveBtn').onclick=savePost;
   // 写作页表单：输入即自动保存草稿；关闭/刷新前兜底保存
   ['title','date','tags','categories'].forEach(id=>{
@@ -762,12 +796,20 @@ document.addEventListener('DOMContentLoaded', ()=>{
   $('#newFolderBtn').onclick=newFolder;
   loadBranches(true);
   $$('.wk-tab').forEach(t=>t.onclick=()=>switchTab(t.dataset.tab));
+  // 浏览器前进/后退：按路径切换页面，不刷新
+  window.addEventListener('popstate',()=>{
+    const name=pageFromPath(location.pathname);
+    if(name==='write'){ enterWritePage(); }
+    else go(name,{replace:true});
+  });
 });
 `;
 
 export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "manage"): string {
   const repo = String(ghRepo || "");
-  const INITIAL = initial === "write" ? "write" : "manage";
+  const INITIAL = ["manage","comments","files","build","subscribe","write"].includes(initial)
+    ? initial
+    : "manage";
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -792,11 +834,11 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
 </nav>
 
 <div class="wk-tabs" ${INITIAL === "write" ? 'style="display:none"' : ""}>
-  <button class="wk-tab active" data-tab="manage">管理文章</button>
-  <button class="wk-tab" data-tab="comments">评论管理</button>
-  <button class="wk-tab" data-tab="files">文件管理</button>
-  <button class="wk-tab" data-tab="build">部署记录</button>
-  <button class="wk-tab" data-tab="subscribe">订阅管理</button>
+  <button class="wk-tab ${INITIAL === "manage" ? "active" : ""}" data-tab="manage">管理文章</button>
+  <button class="wk-tab ${INITIAL === "comments" ? "active" : ""}" data-tab="comments">评论管理</button>
+  <button class="wk-tab ${INITIAL === "files" ? "active" : ""}" data-tab="files">文件管理</button>
+  <button class="wk-tab ${INITIAL === "build" ? "active" : ""}" data-tab="build">部署记录</button>
+  <button class="wk-tab ${INITIAL === "subscribe" ? "active" : ""}" data-tab="subscribe">订阅管理</button>
 </div>
 
 <div class="wk-wrap">
@@ -823,7 +865,7 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
       <div class="toolbar" style="justify-content:space-between;align-items:center">
         <h3 class="wk-title" style="margin:0;border:none;padding:0" id="editorTitle">发布新文章</h3>
         <div style="display:flex;gap:6px">
-          <button class="wk-btn ghost sm" onclick="location.href='/admin/manage'">← 返回管理文章</button>
+          <button class="wk-btn ghost sm" onclick="go('manage')">← 返回管理文章</button>
         </div>
       </div>
       <label class="wk-label">标题</label>
