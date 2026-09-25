@@ -50,9 +50,67 @@ app.get("/api/health", async (c) => {
   });
 });
 
-// ---------- 3.5 访问量统计 API（占位：仅返回结构，后续接入统计后返回真实数据）----------
+// ---------- 3.5 访问量统计 API ----------
+// 允许跨域（博客静态站可能部署在 github.io 等其它域名）
+const VISIT_CORS = {
+  "access-control-allow-origin": "*",
+  "access-control-allow-methods": "GET,POST,OPTIONS",
+  "access-control-allow-headers": "content-type",
+};
+const visitJson = (body: unknown, status = 200) =>
+  new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json; charset=utf-8", ...VISIT_CORS },
+  });
+
+// 今日日期按东八区（Asia/Shanghai）计算，格式 YYYY-MM-DD
+function visitDay(): string {
+  return new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+}
+
+// 读取今日/总访问量
+async function visitStats(db: D1Database) {
+  const day = visitDay();
+  const row = await db
+    .prepare(
+      `SELECT (SELECT "count" FROM "wl_Visit" WHERE "day"=?1) AS today,
+              (SELECT COALESCE(SUM("count"),0) FROM "wl_Visit") AS total`
+    )
+    .bind(day)
+    .first<{ today: number | null; total: number }>();
+  return { today: row?.today ?? 0, total: row?.total ?? 0 };
+}
+
+// 预检
+app.options("/api/visit", (c) => new Response(null, { status: 204, headers: VISIT_CORS }));
+
+// 查询：GET /api/visit/stats
 app.get("/api/visit/stats", async (c) => {
-  return json({ ok: true, today: 0, total: 0 });
+  try {
+    const s = await visitStats((c.env as Bindings).DB);
+    return visitJson({ ok: true, ...s });
+  } catch {
+    return visitJson({ ok: false, today: 0, total: 0 });
+  }
+});
+
+// 记录一次访问：POST /api/visit
+app.post("/api/visit", async (c) => {
+  const db = (c.env as Bindings).DB;
+  const day = visitDay();
+  try {
+    await db
+      .prepare(
+        `INSERT INTO "wl_Visit" ("day","count") VALUES (?1,1)
+         ON CONFLICT("day") DO UPDATE SET "count"="count"+1`
+      )
+      .bind(day)
+      .run();
+    const s = await visitStats(db);
+    return visitJson({ ok: true, ...s });
+  } catch {
+    return visitJson({ ok: false, today: 0, total: 0 });
+  }
 });
 
 // ---------- 4. 文章管理 API（需 Waline 管理员 JWT）----------
