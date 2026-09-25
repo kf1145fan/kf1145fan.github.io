@@ -84,6 +84,10 @@ function ensureVisitTables(db: D1Database): Promise<unknown> {
         db.prepare(
           `CREATE TABLE IF NOT EXISTS "wl_VisitVisitor" ("day" TEXT NOT NULL, "visitor" TEXT NOT NULL, PRIMARY KEY("day","visitor"))`
         ),
+        // 保留天数等设置存放于此（与 Waline 共用 wl_Settings，缺失时自愈创建）
+        db.prepare(
+          `CREATE TABLE IF NOT EXISTS "wl_Settings" ("key" TEXT PRIMARY KEY, "value" TEXT NOT NULL DEFAULT '', "updatedAt" TEXT DEFAULT (datetime('now')))`
+        ),
       ])
       .catch((e) => {
         visitTablesReady = null;
@@ -284,7 +288,13 @@ app.get("/admin/api/visit/daily", async (c) => {
 // 读取设置：/admin/api/visit/settings
 app.get("/admin/api/visit/settings", async (c) => {
   if (!isAdmin(c.get("userInfo"))) return json({ error: "unauthorized" }, 401);
-  return json({ ok: true, retention_days: await visitRetention((c.env as Bindings).DB) });
+  const db = (c.env as Bindings).DB;
+  try {
+    await ensureVisitTables(db);
+    return json({ ok: true, retention_days: await visitRetention(db) });
+  } catch (e) {
+    return json({ ok: false, error: String(e) }, 500);
+  }
 });
 
 // 保存设置：/admin/api/visit/settings（数据保留天数，1-3650）
@@ -296,6 +306,7 @@ app.put("/admin/api/visit/settings", async (c) => {
     return json({ error: "retention_days 需为 1-3650 的整数" }, 400);
   }
   try {
+    await ensureVisitTables((c.env as Bindings).DB);
     await (c.env as Bindings).DB.prepare(
       `INSERT INTO "wl_Settings" ("key","value","updatedAt") VALUES (?1,?2,datetime('now'))
        ON CONFLICT("key") DO UPDATE SET "value"=?2, "updatedAt"=datetime('now')`
