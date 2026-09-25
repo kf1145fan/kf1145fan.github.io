@@ -400,22 +400,30 @@ function pollBuild(){
       if(tries>=12){ clearInterval(buildTimer); buildTimer=null; showBuildBanner('暂时无法获取构建状态，请稍后刷新页面查看站点','err'); return; }
       return;
     }
+    const runs=d.runs||[];
+    const multi=runs.length>1?'（当前共 '+runs.length+' 次构建）':'';
     if(d.running){
-      showBuildBanner('正在重建站点（工作流 '+esc(d.status)+'），已等待约 '+(tries*5)+' 秒…');
-      if(tries>=24){ clearInterval(buildTimer); buildTimer=null; showBuildBanner('重建仍在进行，稍后可刷新站点查看','err'); return; }
+      showBuildBanner('正在重建站点'+multi+'，已等待约 '+(tries*5)+' 秒…');
+      if(tries>=24){ clearInterval(buildTimer); buildTimer=null; showBuildBanner('重建仍在进行，稍后可刷新站点查看'+multi,'err'); return; }
       return;
     }
     clearInterval(buildTimer); buildTimer=null;
     if(d.conclusion==='success'||d.conclusion==='completed'){
-      showBuildBanner('站点已更新完成，可以刷新首页查看','ok');
+      showBuildBanner('站点已更新完成，可以刷新首页查看'+multi,'ok');
     } else {
-      showBuildBanner('工作流结束（'+(d.conclusion||d.status||'未知')+'），可能未成功，请到 '+esc(d.html_url||'')+' 查看详情','err');
+      showBuildBanner('工作流结束（'+(d.conclusion||d.status||'未知')+'），可能未成功，请到 '+esc(d.html_url||'')+' 查看详情'+multi,'err');
     }
   }, 5000);
 }
 
 // ---------- 手动运行工作流 + 部署记录 ----------
 async function triggerBuild(){
+  // 先检测是否已有构建在跑/排队，避免手动触发叠加出重复构建
+  const st=await api(API_BASE+'/build');
+  if(st.ok&&st.data&&st.data.running){
+    const n=(st.data.runs||[]).length;
+    if(!confirm('已有一个部署正在进行中'+(n>1?'（最近有 '+n+' 次构建）':'')+'，再触发一个会造成重复构建。确定还要运行吗？')) return;
+  }
   if(!confirm('确定运行部署工作流吗？将重建整个站点。')) return;
   const r=await api(API_BASE+'/build/trigger',{method:'POST'});
   if(r.status===401){ redirectLogin(); return; }

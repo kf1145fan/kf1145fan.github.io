@@ -425,24 +425,36 @@ async function handleBuildStatus(env: Bindings): Promise<Response> {
   const { token, repo, headers } = ghConfig(env);
   if (!token) return json({ ok: false, error: "GH_TOKEN not configured" }, 500);
   try {
-    // 查询仓库最近一次 workflow run（deploy.yml 由 push 触发）
+    // 查询最近几次 workflow run（deploy.yml 由 push / workflow_dispatch 触发）
     const res = await fetch(
-      `https://api.github.com/repos/${repo}/actions/runs?per_page=1`,
+      `https://api.github.com/repos/${repo}/actions/workflows/deploy.yml/runs?per_page=5`,
       { headers },
     );
     if (!res.ok) return json({ ok: false, error: "github error " + res.status }, 502);
     const data = (await res.json()) as any;
-    const run = ((data.workflow_runs || []) as any[])[0];
-    if (!run) return json({ ok: true, running: false, status: "none", conclusion: "none" });
-    const running = run.status === "in_progress" || run.status === "queued" || run.status === "pending" || run.status === "waiting";
+    const runs = ((data.workflow_runs || []) as any[]).map((r: any) => ({
+      id: r.id,
+      event: r.event || "",
+      status: r.status,
+      conclusion: r.conclusion || "",
+      created_at: r.created_at || "",
+      html_url: r.html_url || "",
+    }));
+    const latest = runs[0] || null;
+    if (!latest) return json({ ok: true, running: false, status: "none", conclusion: "none", runs: [] });
+    const isActive = (s: string) => s === "in_progress" || s === "queued" || s === "pending" || s === "waiting";
+    // 只要最近几次里还有正在运行的，就视为整体运行中
+    const running = runs.some((r: any) => isActive(r.status));
     return json({
       ok: true,
       running,
-      status: run.status,
-      conclusion: run.conclusion || "",
-      name: run.name || run.display_title || "",
-      started: run.created_at || "",
-      html_url: run.html_url || "",
+      status: latest.status,
+      conclusion: latest.conclusion || "",
+      name: data.workflow_runs?.[0]?.name || data.workflow_runs?.[0]?.display_title || "",
+      started: latest.created_at || "",
+      html_url: latest.html_url || "",
+      latest,
+      runs,
     });
   } catch (e) {
     return json({ ok: false, error: String(e) }, 500);
