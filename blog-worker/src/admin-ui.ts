@@ -661,8 +661,8 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string): string {
       <input class="wk-input" id="title" placeholder="文章标题">
       <div class="wk-row">
         <div class="wk-field"><label class="wk-label">日期</label><input class="wk-input" type="date" id="date"></div>
-        <div class="wk-field"><label class="wk-label">分类（可从历史中选择或自定义，多个用逗号分开）</label><input class="wk-input" id="categories" list="catList" placeholder="如 刷机,教程"></div>
-        <div class="wk-field"><label class="wk-label">标签（可从历史中选择或自定义，多个用逗号分开）</label><input class="wk-input" id="tags" list="tagList" placeholder="如 刷机,教程"></div>
+        <div class="wk-field"><label class="wk-label">分类</label><input class="wk-input" id="categories" list="catList" placeholder="多个用逗号分开"></div>
+        <div class="wk-field"><label class="wk-label">标签</label><input class="wk-input" id="tags" list="tagList" placeholder="多个用逗号分开"></div>
       </div>
       <datalist id="catList"></datalist>
       <datalist id="tagList"></datalist>

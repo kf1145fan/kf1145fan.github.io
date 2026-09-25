@@ -340,7 +340,7 @@ async function handleDeletePost(env: Bindings, path: string): Promise<Response> 
   }
 }
 
-// ---------- front matter 解析 ----------
+// ---------- front matter 解析（逐行，稳健）----------
 function parseFrontMatter(raw: string): {
   title: string;
   date: string;
@@ -355,29 +355,43 @@ function parseFrontMatter(raw: string): {
   let body = raw;
   const m = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
   if (m) {
-    const fm = m[1];
     body = m[2];
-    const is = fm.match(/^title:\s*['"]?(.*?)['"]?\s*$/m);
-    const ds = fm.match(/^date:\s*(\d{4}-\d{2}-\d{2})/m);
-    const cs = fm.match(/^categories:\s*([^\r\n]*)(?:\r?\n([\s\S]*?))?(?=\r?\n[a-zA-Z0-9_]+:|$)/im);
-    const ts = fm.match(/^tags:\s*([^\r\n]*)(?:\r?\n([\s\S]*?))?(?=\r?\n[a-zA-Z0-9_]+:|$)/im);
-    if (is) title = is[1].trim();
-    if (ds) date = ds[1];
-    const parseList = (inline: string | undefined, multi: string | undefined): string[] => {
-      const out: string[] = [];
-      if (inline && inline.trim()) {
-        out.push(...inline.replace(/[[\]"]/g, "").split(",").map((s) => s.trim()).filter(Boolean));
-      }
-      if (multi) {
-        for (const line of multi.split("\n")) {
-          const v = line.trim().replace(/^-\s*/, "").trim();
-          if (v) out.push(v);
+    const lines = m[1].split(/\r?\n/);
+    let key = ""; // categories / tags
+    const cleanList = (v: string): string[] =>
+      v.replace(/\[|\]|"|'/g, "").split(/[,，、\s]+/).map((s) => s.trim()).filter(Boolean);
+    for (const line of lines) {
+      const kv = line.match(/^([a-zA-Z0-9_]+)\s*:\s*(.*)$/);
+      if (kv) {
+        const k = kv[1].toLowerCase();
+        const v = kv[2];
+        if (k === "title") title = v.trim();
+        else if (k === "date") {
+          const d = v.match(/(\d{4}-\d{2}-\d{2})/);
+          if (d) date = d[1];
+        } else if (k === "categories") {
+          key = "categories";
+          if (v.trim()) categories.push(...cleanList(v));
+          else categories.length = 0;
+        } else if (k === "tags") {
+          key = "tags";
+          if (v.trim()) tags.push(...cleanList(v));
+          else tags.length = 0;
+        } else if (k === "theme") {
+          // 忽略
+        } else {
+          // 其他键（title/date 之外的历史选项），停止收集列表项
+          if (!/^(categories|tags)$/.test(k)) key = "";
+        }
+      } else {
+        // 列表项：连字符开头
+        const item = line.trim();
+        if (key && /^[-*]\s+/.test(item)) {
+          const v = item.replace(/^[-*]\s*/, "").trim();
+          if (v) (key === "categories" ? categories : tags).push(v);
         }
       }
-      return out;
-    };
-    if (cs) categories.push(...parseList(cs[1], cs[2]));
-    if (ts) tags.push(...parseList(ts[1], ts[2]));
+    }
   }
   return { title, date, categories, tags, body: body.replace(/<!--\s*more\s*-->[\s\S]*$/, "").trimStart() };
 }
