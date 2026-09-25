@@ -110,6 +110,7 @@ a{color:var(--accent);text-decoration:none}
 .stat-card .num{font-size:22px;font-weight:700;color:var(--accent);line-height:1.3}
 .stat-card .lbl{font-size:11px;color:var(--muted)}
 /* 访问趋势折线图 */
+#visitChart{position:relative}
 .chart-svg{max-width:100%}
 .chart-svg .cl-grid{stroke:var(--border);stroke-width:1}
 .chart-svg .cl-ytxt{fill:var(--muted);font-size:11px}
@@ -117,6 +118,9 @@ a{color:var(--accent);text-decoration:none}
 .chart-svg .cl-line{fill:none;stroke:var(--accent);stroke-width:2;stroke-linejoin:round;stroke-linecap:round}
 .chart-svg .cl-area{fill:var(--accent);opacity:.1;stroke:none}
 .chart-svg .cl-dot{fill:var(--accent)}
+.chart-svg .cl-cross{stroke:var(--muted);stroke-width:1;stroke-dasharray:3 3;pointer-events:none}
+.chart-svg .cl-mark{fill:var(--card);stroke:var(--accent);stroke-width:2;pointer-events:none}
+.chart-tip{position:absolute;transform:translate(-50%,0);background:var(--nav);color:var(--nav-active);font-size:12px;line-height:1.4;padding:4px 8px;border-radius:3px;white-space:nowrap;pointer-events:none;z-index:5}
 @media(max-width:640px){.chart-svg .cl-ytxt,.chart-svg .cl-xtxt{font-size:15px}}
 /* 顶部标签栏：移动端横向滑动 */
 .wk-tabs{display:flex;gap:0;max-width:1080px;margin:14px auto 0;padding:0 16px;border-bottom:1px solid var(--border);overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none}
@@ -257,7 +261,47 @@ function renderVisitChart(series){
       xl += '<text class="cl-xtxt" x="'+X(i).toFixed(1)+'" y="'+(H-9)+'" text-anchor="middle">'+esc(String(p.day).slice(5))+'</text>';
     }
   });
-  el.innerHTML = '<svg viewBox="0 0 '+W+' '+H+'" class="chart-svg" style="width:100%;height:auto;display:block">'+grid+area+line+dots+xl+'</svg>';
+  const cross = '<line class="cl-cross" y1="'+padT+'" y2="'+(padT+ih)+'" style="opacity:0"/>';
+  const mark = '<circle class="cl-mark" r="4" style="opacity:0"/>';
+  el.innerHTML = '<div class="chart-tip hidden"></div><svg viewBox="0 0 '+W+' '+H+'" class="chart-svg" style="width:100%;height:auto;display:block">'+grid+area+line+dots+cross+mark+xl+'</svg>';
+  const svg = el.querySelector('svg');
+  el.__geo = {
+    W:W, H:H, padL:padL, padT:padT, iw:iw, ih:ih, n:n, series:series, X:X, Y:Y,
+    cross: svg.querySelector('.cl-cross'),
+    mark: svg.querySelector('.cl-mark'),
+    tip: el.querySelector('.chart-tip')
+  };
+  // 鼠标悬停：显示该点对应的日期与访问量（补齐「列」的提示）
+  el.onmousemove = function(ev){
+    const g = el.__geo;
+    if(!g || !g.tip) return;
+    const rect = el.getBoundingClientRect();
+    if(!rect.width) return;
+    const px = (ev.clientX - rect.left) * (g.W / rect.width);
+    let i = g.n === 1 ? 0 : Math.round((px - g.padL) / (g.iw / (g.n - 1)));
+    i = Math.max(0, Math.min(g.n - 1, i));
+    const p = g.series[i] || {};
+    const cx = g.X(i), cy = g.Y(Number(p.count) || 0);
+    g.cross.setAttribute('x1', cx.toFixed(1));
+    g.cross.setAttribute('x2', cx.toFixed(1));
+    g.cross.style.opacity = '1';
+    g.mark.setAttribute('cx', cx.toFixed(1));
+    g.mark.setAttribute('cy', cy.toFixed(1));
+    g.mark.style.opacity = '1';
+    g.tip.textContent = String(p.day || '') + '：' + (Number(p.count) || 0) + ' 次';
+    g.tip.classList.remove('hidden');
+    const tx = Math.max(34, Math.min(rect.width - 34, (cx / g.W) * rect.width));
+    const ty = Math.max(0, (cy / g.H) * rect.height - 36);
+    g.tip.style.left = tx + 'px';
+    g.tip.style.top = ty + 'px';
+  };
+  el.onmouseleave = function(){
+    const g = el.__geo;
+    if(!g) return;
+    g.cross.style.opacity = '0';
+    g.mark.style.opacity = '0';
+    if(g.tip) g.tip.classList.add('hidden');
+  };
 }
 
 // 读取今日/总访问量 + 最近 N 天趋势
@@ -892,6 +936,8 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
   const INITIAL = ["manage","comments","files","build","visit","subscribe","write"].includes(initial)
     ? initial
     : "manage";
+  // 服务端就直接渲染出正确的初始页面，避免先闪一下「管理文章」再切过去
+  const pageCls = (name: string) => "wk-page" + (INITIAL === name ? "" : " hidden");
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -927,7 +973,7 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
 <div class="wk-wrap">
 
   <!-- 管理文章（默认首页） -->
-  <div id="page-manage" class="wk-page">
+  <div id="page-manage" class="${pageCls("manage")}">
     <div id="buildBanner" class="build-banner hidden" style="margin-bottom:0"></div>
     <div class="wk-card">
       <div class="toolbar" style="justify-content:space-between;align-items:center">
@@ -939,7 +985,7 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
   </div>
 
   <!-- 写作页 -->
-  <div id="page-write" class="wk-page hidden">
+  <div id="page-write" class="${pageCls("write")}">
     <div class="wk-card">
       <div class="toolbar" style="justify-content:space-between;align-items:center">
         <h3 class="wk-title" style="margin:0;border:none;padding:0" id="editorTitle">发布新文章</h3>
@@ -966,7 +1012,7 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
   </div>
 
   <!-- 评论管理 -->
-  <div id="page-comments" class="wk-page hidden">
+  <div id="page-comments" class="${pageCls("comments")}">
     <div class="wk-card">
       <div class="toolbar" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">
         <h3 class="wk-title" style="margin:0;border:none;padding:0">评论管理</h3>
@@ -982,7 +1028,7 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
   </div>
 
   <!-- 文件管理 -->
-  <div id="page-files" class="wk-page hidden">
+  <div id="page-files" class="${pageCls("files")}">
     <div class="wk-card">
       <div class="toolbar" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">
         <div style="display:flex;align-items:center;gap:10px">
@@ -1016,7 +1062,7 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
   </div>
 
   <!-- 部署记录 -->
-  <div id="page-build" class="wk-page hidden">
+  <div id="page-build" class="${pageCls("build")}">
     <div id="buildBannerBuild" class="build-banner hidden" style="margin-bottom:10px"></div>
     <div class="wk-card">
       <div class="toolbar" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">
@@ -1029,7 +1075,7 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
   </div>
 
   <!-- 访问量（仅管理员可见） -->
-  <div id="page-visit" class="wk-page hidden">
+  <div id="page-visit" class="${pageCls("visit")}">
     <div class="stats-scroll"><div class="stats">
       <div class="stat-card"><div class="num" id="statToday">-</div><div class="lbl">今日访问数</div></div>
       <div class="stat-card"><div class="num" id="statTotal">-</div><div class="lbl">总访问量</div></div>
@@ -1097,7 +1143,7 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
   </div>
 
   <!-- 订阅管理（空界面，功能开发中） -->
-  <div id="page-subscribe" class="wk-page hidden">
+  <div id="page-subscribe" class="${pageCls("subscribe")}">
     <div class="wk-card">
       <h3 class="wk-title" style="margin:0 0 12px">订阅管理</h3>
       <div class="empty">订阅管理功能建设中，敬请期待。</div>
