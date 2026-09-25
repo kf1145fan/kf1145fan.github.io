@@ -68,9 +68,27 @@ function visitDay(): string {
   return new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
 }
 
+// 确保 wl_Visit 表存在（自愈：CI 的 D1 迁移可能因令牌权限失败，此处按需建表）
+let visitTableReady: Promise<unknown> | null = null;
+function ensureVisitTable(db: D1Database): Promise<unknown> {
+  if (!visitTableReady) {
+    visitTableReady = db
+      .prepare(
+        `CREATE TABLE IF NOT EXISTS "wl_Visit" ("day" TEXT PRIMARY KEY, "count" INTEGER NOT NULL DEFAULT 0)`
+      )
+      .run()
+      .catch((e) => {
+        visitTableReady = null;
+        throw e;
+      });
+  }
+  return visitTableReady;
+}
+
 // 读取今日/总访问量
 async function visitStats(db: D1Database) {
   const day = visitDay();
+  await ensureVisitTable(db);
   const row = await db
     .prepare(
       `SELECT (SELECT "count" FROM "wl_Visit" WHERE "day"=?1) AS today,
@@ -89,7 +107,8 @@ app.get("/api/visit/stats", async (c) => {
   try {
     const s = await visitStats((c.env as Bindings).DB);
     return visitJson({ ok: true, ...s });
-  } catch {
+  } catch (e) {
+    console.error("visit stats failed", e);
     return visitJson({ ok: false, today: 0, total: 0 });
   }
 });
@@ -108,7 +127,8 @@ app.post("/api/visit", async (c) => {
       .run();
     const s = await visitStats(db);
     return visitJson({ ok: true, ...s });
-  } catch {
+  } catch (e) {
+    console.error("visit record failed", e);
     return visitJson({ ok: false, today: 0, total: 0 });
   }
 });
