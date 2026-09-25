@@ -262,6 +262,7 @@ async function openEdit(path){
   pendingEditorValue=p.body||'';
   showPage('write');
   initEditorOnce();
+  loadTaxonomySuggest(); // 编辑页也需要分类/标签历史建议（SPA 切换不会重新加载页面）
   window.scrollTo(0,0);
 }
 function nameOf(path){ return String(path||'').split('/').pop().replace(/\\.md$/,'')||'未命名'; }
