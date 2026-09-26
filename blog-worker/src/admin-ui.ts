@@ -612,17 +612,16 @@ function pollBuild(){
       return;
     }
     const runs=d.runs||[];
-    const multi=runs.length>1?'（当前共 '+runs.length+' 次构建）':'';
     if(d.running){
-      showBuildBanner('正在重建站点'+multi+'，已等待约 '+(tries*5)+' 秒…');
-      if(tries>=24){ clearInterval(buildTimer); buildTimer=null; showBuildBanner('重建仍在进行，稍后可刷新站点查看'+multi,'err'); return; }
+      showBuildBanner('正在重建站点，已等待约 '+(tries*5)+' 秒…');
+      if(tries>=24){ clearInterval(buildTimer); buildTimer=null; showBuildBanner('重建仍在进行，稍后可刷新站点查看','err'); return; }
       return;
     }
     clearInterval(buildTimer); buildTimer=null;
     if(d.conclusion==='success'||d.conclusion==='completed'){
-      showBuildBanner('站点已更新完成，可以刷新首页查看'+multi,'ok');
+      showBuildBanner('站点已更新完成，可以刷新首页查看','ok');
     } else {
-      showBuildBanner('工作流结束（'+(d.conclusion||d.status||'未知')+'），可能未成功，请到 '+esc(d.html_url||'')+' 查看详情'+multi,'err');
+      showBuildBanner('工作流结束（'+(d.conclusion||d.status||'未知')+'），可能未成功，请到 '+esc(d.html_url||'')+' 查看详情','err');
     }
   }, 5000);
 }
@@ -1092,7 +1091,7 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
         <button class="wk-btn sm" onclick="applyVisitDays()">应用</button>
       </div>
       <div id="visitChart"><div class="empty">加载中...</div></div>
-      <p class="wk-label" style="margin:8px 0 0">图中区间合计：<b id="visitRangeSum">-</b>（仅展示所选天数，不改变数据保留策略）</p>
+      <p class="wk-label" style="margin:8px 0 0">图中区间合计：<b id="visitRangeSum">-</b></p>
     </div>
 
     <div class="wk-card">
