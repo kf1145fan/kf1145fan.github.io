@@ -1,16 +1,30 @@
 <% if (theme.visit_counter) { %>
+<p>
+    <span><%- theme.visit_counter.today %><span id="wl_visit_today">-</span></span>
+    <span><%- theme.visit_counter.total %><span id="wl_visit_total">-</span></span>
+</p>
 <script>
 (function () {
     var API = ('<%- theme.visit_counter.api || config.url %>' || '').replace(/\/+$/, '');
     if (!API) { return; }
-    // 每次访问上报一次（全站生效）：同一访客同一天只计一次，刷新不重复
-    try {
-        if (navigator.sendBeacon) {
-            navigator.sendBeacon(API + '/api/visit');
-            return;
-        }
-    } catch (e) {}
-    fetch(API + '/api/visit', { method: 'POST', keepalive: true }).catch(function () {});
+    function render(d) {
+        if (!d) { return; }
+        var t = document.getElementById('wl_visit_today');
+        var s = document.getElementById('wl_visit_total');
+        if (t && d.today != null) { t.textContent = d.today; }
+        if (s && d.total != null) { s.textContent = d.total; }
+    }
+    // 上报一次访问：同一访客同一天只计一次，刷新不会重复增加；接口会回传最新数值
+    fetch(API + '/api/visit', { method: 'POST', keepalive: true })
+        .then(function (r) { return r.json(); })
+        .then(function (d) { if (d && d.ok) { render(d); } })
+        .catch(function () {
+            // 上报失败时退化为只读查询
+            fetch(API + '/api/visit/stats')
+                .then(function (r) { return r.json(); })
+                .then(render)
+                .catch(function () {});
+        });
 })();
 </script>
 <% } %>

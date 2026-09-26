@@ -31,7 +31,6 @@
                 <%- partial('post/head-meta') %>
             <% } else if(is_home()){ %>
                 <%- config.subtitle %>
-                <%- partial('plugins/visit-inline') %>
                 <%- partial('plugins/hitokoto') %>
             <% } else if (page.layout === 'page' && page.description) {%>
                 <%- page.description %>
