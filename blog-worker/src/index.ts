@@ -50,6 +50,50 @@ app.get("/api/health", async (c) => {
   });
 });
 
+// ---------- 3.1 站点初始化状态（首次部署时引导创建管理员）----------
+// 无任何用户时返回 needInit=true，登录页据此自动切换到「创建管理员」表单。
+app.get("/api/site/init", async (c) => {
+  const db = (c.env as Bindings).DB;
+  try {
+    // 自愈：全新环境下 D1 迁移可能未执行，先确保用户表存在（否则注册也会失败）
+    await db
+      .prepare(
+        `CREATE TABLE IF NOT EXISTS "wl_Users" (
+          "id" INTEGER PRIMARY KEY AUTOINCREMENT,
+          "display_name" TEXT NOT NULL DEFAULT '',
+          "email" TEXT NOT NULL DEFAULT '',
+          "password" TEXT NOT NULL DEFAULT '',
+          "type" TEXT NOT NULL DEFAULT 'guest',
+          "label" TEXT DEFAULT '',
+          "url" TEXT DEFAULT '',
+          "avatar" TEXT DEFAULT '',
+          "github" TEXT DEFAULT '',
+          "twitter" TEXT DEFAULT '',
+          "facebook" TEXT DEFAULT '',
+          "google" TEXT DEFAULT '',
+          "weibo" TEXT DEFAULT '',
+          "qq" TEXT DEFAULT '',
+          "2fa" TEXT DEFAULT '',
+          "createdAt" TEXT DEFAULT (datetime('now')),
+          "updatedAt" TEXT DEFAULT (datetime('now'))
+        )`
+      )
+      .run();
+    await db
+      .prepare(
+        `CREATE UNIQUE INDEX IF NOT EXISTS "idx_users_email" ON "wl_Users" ("email")`
+      )
+      .run();
+    const row = await db
+      .prepare(`SELECT COUNT(*) AS count FROM "wl_Users"`)
+      .first<{ count: number }>();
+    return json({ ok: true, needInit: (row?.count ?? 0) === 0 });
+  } catch (e) {
+    console.error("site init check failed", e);
+    return json({ ok: true, needInit: true });
+  }
+});
+
 // ---------- 3.5 访问量统计 API ----------
 // 允许跨域（博客静态站可能部署在 github.io 等其它域名）
 const VISIT_CORS = {
