@@ -112,18 +112,25 @@ async function visitRetention(db: D1Database): Promise<number> {
   return VISIT_DEFAULT_RETENTION;
 }
 
-// 读取今日/总访问量
+// 当月前缀（YYYMM-MM），用于汇总当月访问量
+function visitMonthPrefix(): string {
+  return new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 7); // YYYY-MM
+}
+
+// 读取今日/当月/总访问量
 async function visitStats(db: D1Database) {
   const day = visitDay();
+  const month = visitMonthPrefix();
   await ensureVisitTables(db);
   const row = await db
     .prepare(
       `SELECT (SELECT "count" FROM "wl_Visit" WHERE "day"=?1) AS today,
+              (SELECT COALESCE(SUM("count"),0) FROM "wl_Visit" WHERE "day" LIKE ?2 || '%') AS month,
               (SELECT COALESCE(SUM("count"),0) FROM "wl_Visit") AS total`
     )
-    .bind(day)
-    .first<{ today: number | null; total: number }>();
-  return { today: row?.today ?? 0, total: row?.total ?? 0 };
+    .bind(day, month)
+    .first<{ today: number | null; month: number | null; total: number }>();
+  return { today: row?.today ?? 0, month: row?.month ?? 0, total: row?.total ?? 0 };
 }
 
 // 最近 days 天的访问趋势（缺失日期补 0）

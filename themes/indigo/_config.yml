@@ -171,6 +171,7 @@ about: 用户页面中作者相关的描述性文字，如不需要设为 false
 visit_counter:
   api:                # 接口地址，留空则使用站点 url（config.url）
   today: 今日访问：
+  month: 当月访问量：
   total: 总访问量：
 
 # 动态定义title

@@ -1,6 +1,7 @@
 <% if (theme.visit_counter) { %>
 <p>
     <span><%- theme.visit_counter.today %><span id="wl_visit_today">-</span></span>
+    <span><%- theme.visit_counter.month %><span id="wl_visit_month">-</span></span>
     <span><%- theme.visit_counter.total %><span id="wl_visit_total">-</span></span>
 </p>
 <script>
@@ -10,8 +11,10 @@
     function render(d) {
         if (!d) { return; }
         var t = document.getElementById('wl_visit_today');
+        var m = document.getElementById('wl_visit_month');
         var s = document.getElementById('wl_visit_total');
         if (t && d.today != null) { t.textContent = d.today; }
+        if (m && d.month != null) { m.textContent = d.month; }
         if (s && d.total != null) { s.textContent = d.total; }
     }
     // 上报一次访问：同一访客同一天只计一次，刷新不会重复增加；接口会回传最新数值
