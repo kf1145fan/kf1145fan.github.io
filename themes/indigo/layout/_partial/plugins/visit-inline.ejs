@@ -1,0 +1,29 @@
+<% if (theme.visit_counter) { %>
+<div class="visit-inline" id="wlVisitInline" style="display:inline-flex;flex-wrap:nowrap;white-space:nowrap;align-items:center;gap:16px;margin-top:8px;font-size:13px;font-weight:300;color:inherit;opacity:.92">
+    <span><%- theme.visit_counter.today %><b id="wl_visit_today">-</b></span>
+    <span><%- theme.visit_counter.total %><b id="wl_visit_total">-</b></span>
+</div>
+<script>
+(function () {
+    var API = ('<%- theme.visit_counter.api || config.url %>' || '').replace(/\/+$/, '');
+    if (!API) { return; }
+    function render(d) {
+        if (!d) { return; }
+        var t = document.getElementById('wl_visit_today');
+        var s = document.getElementById('wl_visit_total');
+        if (t && d.today != null) { t.textContent = d.today; }
+        if (s && d.total != null) { s.textContent = d.total; }
+    }
+    // 上报一次访问，接口会回传最新数值（同一访客同一天只计一次，刷新不重复）
+    fetch(API + '/api/visit', { method: 'POST', keepalive: true })
+        .then(function (r) { return r.json(); })
+        .then(function (d) { if (d && d.ok) { render(d); } })
+        .catch(function () {
+            fetch(API + '/api/visit/stats')
+                .then(function (r) { return r.json(); })
+                .then(render)
+                .catch(function () {});
+        });
+})();
+</script>
+<% } %>
