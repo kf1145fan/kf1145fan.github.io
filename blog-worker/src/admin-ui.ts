@@ -109,6 +109,15 @@ a{color:var(--accent);text-decoration:none}
 .stat-card{background:var(--card);border:1px solid var(--border);border-radius:2px;padding:14px 22px;min-width:130px}
 .stat-card .num{font-size:22px;font-weight:700;color:var(--accent);line-height:1.3}
 .stat-card .lbl{font-size:11px;color:var(--muted)}
+/* 订阅者表格 */
+.wk-table{width:100%;border-collapse:collapse;font-size:13px}
+.wk-table th{text-align:left;font-size:11px;color:var(--muted);font-weight:500;padding:8px 6px;border-bottom:1px solid var(--border);white-space:nowrap}
+.wk-table td{padding:8px 6px;border-bottom:1px solid var(--border);word-break:break-all}
+.wk-table tr:last-child td{border-bottom:none}
+.wk-tag{display:inline-block;font-size:11px;padding:1px 7px;border-radius:3px;border:1px solid var(--border);color:var(--muted)}
+.wk-tag.ok{color:#1a7f37;border-color:rgba(26,127,55,.35);background:rgba(26,127,55,.08)}
+.wk-tag.wait{color:#b45309;border-color:rgba(180,83,9,.35);background:rgba(180,83,9,.08)}
+.wk-tag.off{color:var(--muted)}
 /* 访问趋势折线图 */
 #visitChart{position:relative}
 .chart-svg{max-width:100%}
@@ -221,6 +230,7 @@ function go(name){
     if(name==='files') loadFiles();
     if(name==='build') loadBuildHistory();
     if(name==='visit'){ loadVisit(); loadVisitSettings(); }
+    if(name==='subscribe') loadSubscribe();
     window.scrollTo(0,0);
   }
   try{ history.replaceState(null,'','/admin/'+name); }catch(e){}
@@ -361,6 +371,103 @@ async function saveVisitSettings(){
   const r = await api('/admin/api/visit/settings', { method:'PUT', body: JSON.stringify({ retention_days: n }) });
   if(r.ok) toast('已保存：数据保留 ' + n + ' 天');
   else toast('保存失败' + (r.data && r.data.error ? '：' + r.data.error : ''), true);
+}
+
+// ---------- 订阅管理（SMTP 配置 + 订阅者 + 群发）----------
+function subSet(id, v){ const el=$('#'+id); if(el) el.value = (v==null?'':v); }
+async function loadSubscribe(){
+  try{
+    const r = await api('/admin/api/subscribe/settings');
+    if(r.ok && r.data){
+      const d = r.data;
+      subSet('smHost', d.host); subSet('smPort', d.port); subSet('smUser', d.user);
+      subSet('smFromName', d.fromName); subSet('smFromEmail', d.fromEmail);
+      subSet('smSiteName', d.siteName); subSet('smSiteUrl', d.siteUrl);
+      subSet('smSubject', d.subject); subSet('smBody', d.body);
+      const p = $('#smPass');
+      if(p){ p.value=''; p.placeholder = d.hasPass ? '已保存（留空表示不修改）' : '未设置'; }
+      const ck = $('#smNeedConfirm'); if(ck) ck.checked = !!d.needConfirm;
+    }
+  }catch(e){}
+  loadSubscribers();
+}
+async function saveSubscribeSettings(){
+  const v = id => { const el=$('#'+id); return el ? el.value : ''; };
+  const ck = $('#smNeedConfirm');
+  const payload = {
+    host: v('smHost').trim(), port: v('smPort'), user: v('smUser').trim(),
+    pass: v('smPass'), fromName: v('smFromName'), fromEmail: v('smFromEmail').trim(),
+    siteName: v('smSiteName'), siteUrl: v('smSiteUrl').trim(),
+    subject: v('smSubject'), body: v('smBody'), needConfirm: !!(ck && ck.checked)
+  };
+  const r = await api('/admin/api/subscribe/settings', { method:'PUT', body: JSON.stringify(payload) });
+  const msg = $('#subMsg');
+  if(r.ok){
+    toast('配置已保存');
+    if(msg){ msg.className='msg ok'; msg.textContent='配置已保存'; }
+    const p = $('#smPass'); if(p) p.value='';
+    loadSubscribe();
+  } else {
+    const err = (r.data && r.data.error) || '保存失败';
+    toast(err, true);
+    if(msg){ msg.className='msg err'; msg.textContent=err; }
+  }
+}
+async function sendSubscribeTest(){
+  const to = ((($('#smTestTo')||{}).value) || '').trim();
+  if(!to){ toast('请输入测试收件邮箱', true); return; }
+  toast('发送中...');
+  const r = await api('/admin/api/subscribe/test', { method:'POST', body: JSON.stringify({ to: to }) });
+  if(r.ok) toast((r.data && r.data.message) || '测试邮件已发送');
+  else toast('发送失败：' + ((r.data && r.data.error) || '未知错误'), true);
+}
+async function loadSubscribers(){
+  const box = $('#subList');
+  const st = $('#subStatus'), q = $('#subQ');
+  const ps = [];
+  if(st && st.value) ps.push('status=' + encodeURIComponent(st.value));
+  if(q && q.value.trim()) ps.push('q=' + encodeURIComponent(q.value.trim()));
+  try{
+    const r = await api('/admin/api/subscribe/list' + (ps.length ? '?' + ps.join('&') : ''));
+    if(!r.ok || !r.data){ if(box) box.innerHTML = '<div class="empty">加载失败</div>'; return; }
+    const d = r.data, s = d.stats || {};
+    const set = (id, n) => { const el=$('#'+id); if(el) el.textContent = (n==null?'-':n); };
+    set('subTotal', s.total); set('subConfirmed', s.confirmed);
+    set('subPending', s.pending); set('subUnsub', s.unsubscribed);
+    const list = d.list || [];
+    if(!box) return;
+    if(!list.length){ box.innerHTML = '<div class="empty">暂无订阅者</div>'; return; }
+    const cls = { confirmed:'ok', pending:'wait', unsubscribed:'off' };
+    const label = { confirmed:'已确认', pending:'待确认', unsubscribed:'已退订' };
+    let h = '<table class="wk-table"><thead><tr><th>邮箱</th><th>状态</th><th>订阅时间</th><th></th></tr></thead><tbody>';
+    list.forEach(x => {
+      h += '<tr><td>' + esc(x.email) + '</td>'
+        + '<td><span class="wk-tag ' + (cls[x.status]||'') + '">' + esc(label[x.status]||x.status) + '</span></td>'
+        + '<td>' + esc((x.createdAt||'').slice(0,10)) + '</td>'
+        + '<td style="text-align:right"><button class="wk-btn ghost sm" onclick="delSubscriber(' + x.id + ')">删除</button></td></tr>';
+    });
+    h += '</tbody></table>';
+    box.innerHTML = h;
+  }catch(e){ if(box) box.innerHTML = '<div class="empty">加载失败</div>'; }
+}
+async function delSubscriber(id){
+  if(!confirm('确认删除该订阅者？')) return;
+  const r = await api('/admin/api/subscribe/subscriber?id=' + id, { method:'DELETE' });
+  if(r.ok){ toast('已删除'); loadSubscribers(); } else toast('删除失败', true);
+}
+async function broadcastSubscribe(){
+  const v = id => { const el=$('#'+id); return el ? el.value : ''; };
+  const subject = v('bcSubject').trim(), body = v('bcBody').trim();
+  if(!subject || !body){ toast('请填写主题和正文', true); return; }
+  if(!confirm('确认发送给全部已确认订阅者？')) return;
+  toast('发送中，请稍候...');
+  const r = await api('/admin/api/subscribe/send', { method:'POST', body: JSON.stringify({ subject: subject, body: body }) });
+  if(r.ok){
+    const d = r.data || {};
+    let tip = '发送完成：成功 ' + (d.sent||0) + '，失败 ' + (d.failed||0);
+    if(d.limited) tip += '（单次上限 100 封，可再次点击继续）';
+    toast(tip);
+  } else toast('发送失败：' + ((r.data && r.data.error) || '未知错误'), true);
 }
 
 // ---------- 管理文章 ----------
@@ -1141,11 +1248,167 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
     </div>
   </div>
 
-  <!-- 订阅管理（空界面，功能开发中） -->
+  <!-- 订阅管理（SMTP 配置 + 订阅者 + 群发） -->
   <div id="page-subscribe" class="${pageCls("subscribe")}">
     <div class="wk-card">
-      <h3 class="wk-title" style="margin:0 0 12px">订阅管理</h3>
-      <div class="empty">订阅管理功能建设中，敬请期待。</div>
+      <h3 class="wk-title">SMTP 邮件服务器</h3>
+      <p class="wk-label" style="margin-top:0">用于发送订阅确认与群发邮件。<b>Workers 仅支持 465 端口（隐式 TLS）</b>；QQ/163 等邮箱请填写「授权码」而非登录密码。</p>
+      <div class="wk-row">
+        <div style="flex:2">
+          <label class="wk-label">SMTP 服务器</label>
+          <input class="wk-input" id="smHost" placeholder="smtp.qq.com">
+        </div>
+        <div style="flex:1">
+          <label class="wk-label">端口</label>
+          <input class="wk-input" id="smPort" type="number" value="465" placeholder="465">
+        </div>
+      </div>
+      <div class="wk-row">
+        <div style="flex:1">
+          <label class="wk-label">用户名</label>
+          <input class="wk-input" id="smUser" placeholder="you@qq.com">
+        </div>
+        <div style="flex:1">
+          <label class="wk-label">密码 / 授权码</label>
+          <input class="wk-input" id="smPass" type="password" placeholder="留空表示不修改">
+        </div>
+      </div>
+      <div class="wk-row">
+        <div style="flex:1">
+          <label class="wk-label">发件人名称</label>
+          <input class="wk-input" id="smFromName" placeholder="我的博客">
+        </div>
+        <div style="flex:1">
+          <label class="wk-label">发件人邮箱（默认同用户名）</label>
+          <input class="wk-input" id="smFromEmail" placeholder="you@qq.com">
+        </div>
+      </div>
+    </div>
+
+    <div class="wk-card">
+      <h3 class="wk-title">订阅设置</h3>
+      <div class="wk-row">
+        <div style="flex:1">
+          <label class="wk-label">站点名称</label>
+          <input class="wk-input" id="smSiteName" placeholder="我的博客">
+        </div>
+        <div style="flex:1">
+          <label class="wk-label">站点地址</label>
+          <input class="wk-input" id="smSiteUrl" placeholder="https://blog.example.com">
+        </div>
+      </div>
+      <label class="wk-label">确认邮件主题</label>
+      <input class="wk-input" id="smSubject">
+      <label class="wk-label">确认邮件正文（HTML，支持 {{site}} {{email}} {{link}} {{unsubscribe}}）</label>
+      <textarea class="wk-input" id="smBody" rows="6"></textarea>
+      <label class="wk-label" style="display:flex;align-items:center;gap:6px;margin-top:10px;cursor:pointer">
+        <input type="checkbox" id="smNeedConfirm" style="width:auto"> 需要邮件确认（关闭后提交即订阅成功）
+      </label>
+      <div class="filters" style="margin:14px 0 0">
+        <button class="wk-btn sm" onclick="saveSubscribeSettings()">保存配置</button>
+        <input class="wk-input" id="smTestTo" style="width:220px" placeholder="测试收件邮箱">
+        <button class="wk-btn ghost sm" onclick="sendSubscribeTest()">发送测试邮件</button>
+      </div>
+      <div class="msg" id="subMsg"></div>
+    </div>
+
+    <div class="wk-card">
+      <h3 class="wk-title">订阅者</h3>
+      <div class="stats-scroll"><div class="stats">
+        <div class="stat-card"><div class="num" id="subTotal">-</div><div class="lbl">总数</div></div>
+        <div class="stat-card"><div class="num" id="subConfirmed">-</div><div class="lbl">已确认</div></div>
+        <div class="stat-card"><div class="num" id="subPending">-</div><div class="lbl">待确认</div></div>
+        <div class="stat-card"><div class="num" id="subUnsub">-</div><div class="lbl">已退订</div></div>
+      </div></div>
+      <div class="filters" style="margin:10px 0">
+        <select class="wk-input" id="subStatus" style="width:130px" onchange="loadSubscribers()">
+          <option value="">全部状态</option>
+          <option value="confirmed">已确认</option>
+          <option value="pending">待确认</option>
+          <option value="unsubscribed">已退订</option>
+        </select>
+        <input class="wk-input" id="subQ" style="width:200px" placeholder="按邮箱搜索">
+        <button class="wk-btn ghost sm" onclick="loadSubscribers()">刷新</button>
+      </div>
+      <div id="subList"><div class="empty">加载中...</div></div>
+    </div>
+
+    <div class="wk-card">
+      <h3 class="wk-title">群发邮件</h3>
+      <label class="wk-label">主题</label>
+      <input class="wk-input" id="bcSubject">
+      <label class="wk-label">正文（HTML，支持 {{site}} {{email}} {{unsubscribe}}）</label>
+      <textarea class="wk-input" id="bcBody" rows="6"></textarea>
+      <div class="filters" style="margin:14px 0 0">
+        <button class="wk-btn sm" onclick="broadcastSubscribe()">发送给全部已确认订阅者</button>
+        <span class="wk-label" style="margin:0;align-self:center">单次上限 100 封</span>
+      </div>
+    </div>
+
+    <div class="wk-card">
+      <h3 class="wk-title">API 说明</h3>
+      <ul class="wk-list">
+        <li>
+          <div>
+            <div class="name"><span class="chip">POST</span> /api/subscribe</div>
+            <div class="meta">提交订阅（前台调用，允许跨域）。body {"email":"a@b.com"}；返回 {ok, needConfirm, message}</div>
+          </div>
+        </li>
+        <li>
+          <div>
+            <div class="name"><span class="chip">GET</span> /api/subscribe/confirm?token=xxx</div>
+            <div class="meta">确认订阅（邮件里的链接）。返回一个提示页面</div>
+          </div>
+        </li>
+        <li>
+          <div>
+            <div class="name"><span class="chip">GET</span> /api/subscribe/unsubscribe?token=xxx</div>
+            <div class="meta">退订（邮件里的链接）。返回一个提示页面</div>
+          </div>
+        </li>
+        <li>
+          <div>
+            <div class="name"><span class="chip">GET</span> /api/subscribe/stats</div>
+            <div class="meta">订阅数统计。返回 {ok, total, confirmed}</div>
+          </div>
+        </li>
+        <li>
+          <div>
+            <div class="name"><span class="chip">GET</span> /admin/api/subscribe/settings</div>
+            <div class="meta">读取 SMTP/订阅配置（需管理员登录）。返回配置，密码以 hasPass 表示</div>
+          </div>
+        </li>
+        <li>
+          <div>
+            <div class="name"><span class="chip">PUT</span> /admin/api/subscribe/settings</div>
+            <div class="meta">保存配置（需管理员登录）。pass 留空表示不修改</div>
+          </div>
+        </li>
+        <li>
+          <div>
+            <div class="name"><span class="chip">GET</span> /admin/api/subscribe/list?status=&q=</div>
+            <div class="meta">订阅者列表（需管理员登录）。返回 {ok, total, stats, list:[{id,email,status,createdAt}]}</div>
+          </div>
+        </li>
+        <li>
+          <div>
+            <div class="name"><span class="chip">DELETE</span> /admin/api/subscribe/subscriber?id=1</div>
+            <div class="meta">删除订阅者（需管理员登录）</div>
+          </div>
+        </li>
+        <li>
+          <div>
+            <div class="name"><span class="chip">POST</span> /admin/api/subscribe/test</div>
+            <div class="meta">发送测试邮件（需管理员登录）。body {"to":"a@b.com"}</div>
+          </div>
+        </li>
+        <li>
+          <div>
+            <div class="name"><span class="chip">POST</span> /admin/api/subscribe/send</div>
+            <div class="meta">群发邮件（需管理员登录）。body {"subject":"","body":"&lt;html&gt;"}</div>
+          </div>
+        </li>
+      </ul>
     </div>
   </div>
 

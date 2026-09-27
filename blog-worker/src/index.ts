@@ -5,6 +5,7 @@ import { auth } from "./waline/middleware/auth.js";
 import { unzipSync } from "fflate";
 import { renderAdminPage } from "./admin-ui.js";
 import { renderAdminLoginPage } from "./admin-login.js";
+import { sendMail } from "./mail/smtp.js";
 
 // 整合后的完整 Bindings：博客文章(gh + D1 评论) + Waline(JWT/D1)
 type Bindings = Env & {
@@ -358,6 +359,489 @@ app.put("/admin/api/visit/settings", async (c) => {
       .bind("visit_retention_days", String(n))
       .run();
     return json({ ok: true, retention_days: n });
+  } catch (e) {
+    return json({ ok: false, error: String(e) }, 500);
+  }
+});
+
+// ---------- 3.6 邮件订阅 API ----------
+// SMTP 配置存于 wl_Settings(key=subscribe_config)，订阅者存于 wl_Subscriber。
+// 公开接口（/api/subscribe*）允许跨域，方便在任意站点调用；管理接口走 /admin/api/*。
+interface SubscribeConfig {
+  host: string;
+  port: number;
+  user: string;
+  pass: string;
+  fromName: string;
+  fromEmail: string;
+  secure: boolean;
+  siteName: string;
+  siteUrl: string;
+  subject: string;
+  body: string;
+  needConfirm: boolean;
+}
+
+const SUBSCRIBE_DEFAULT_CONFIG: SubscribeConfig = {
+  host: "",
+  port: 465,
+  user: "",
+  pass: "",
+  fromName: "",
+  fromEmail: "",
+  secure: true,
+  siteName: "我的博客",
+  siteUrl: "",
+  subject: "【{{site}}】订阅确认",
+  body:
+    "<p>你好！</p><p>感谢订阅 <b>{{site}}</b>。</p>" +
+    '<p>请点击下面的链接确认订阅：</p><p><a href="{{link}}">{{link}}</a></p>' +
+    '<p>如果不是你本人操作，请忽略这封邮件。</p>',
+  needConfirm: true,
+};
+
+const subscribeJson = (body: unknown, status = 200) =>
+  new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json; charset=utf-8", ...VISIT_CORS },
+  });
+
+// 确保订阅相关表存在（自愈建表，与访问量表同样的策略）
+let subscribeTablesReady: Promise<unknown> | null = null;
+function ensureSubscribeTables(db: D1Database): Promise<unknown> {
+  if (!subscribeTablesReady) {
+    subscribeTablesReady = db
+      .batch([
+        db.prepare(
+          `CREATE TABLE IF NOT EXISTS "wl_Subscriber" (
+            "id" INTEGER PRIMARY KEY AUTOINCREMENT,
+            "email" TEXT NOT NULL,
+            "status" TEXT NOT NULL DEFAULT 'pending',
+            "token" TEXT NOT NULL,
+            "ip" TEXT,
+            "ua" TEXT,
+            "createdAt" TEXT DEFAULT (datetime('now')),
+            "confirmedAt" TEXT,
+            "updatedAt" TEXT DEFAULT (datetime('now'))
+          )`
+        ),
+        db.prepare(
+          `CREATE UNIQUE INDEX IF NOT EXISTS "idx_subscriber_email" ON "wl_Subscriber" ("email")`
+        ),
+        db.prepare(
+          `CREATE INDEX IF NOT EXISTS "idx_subscriber_token" ON "wl_Subscriber" ("token")`
+        ),
+        db.prepare(
+          `CREATE TABLE IF NOT EXISTS "wl_Settings" ("key" TEXT PRIMARY KEY, "value" TEXT NOT NULL DEFAULT '', "updatedAt" TEXT DEFAULT (datetime('now')))`
+        ),
+      ])
+      .catch((e) => {
+        subscribeTablesReady = null;
+        throw e;
+      });
+  }
+  return subscribeTablesReady;
+}
+
+async function getSubscribeConfig(db: D1Database): Promise<SubscribeConfig> {
+  await ensureSubscribeTables(db);
+  const row = await db
+    .prepare(`SELECT "value" FROM "wl_Settings" WHERE "key"='subscribe_config'`)
+    .first<{ value: string }>();
+  if (!row?.value) return { ...SUBSCRIBE_DEFAULT_CONFIG };
+  try {
+    return { ...SUBSCRIBE_DEFAULT_CONFIG, ...JSON.parse(row.value) };
+  } catch (e) {
+    return { ...SUBSCRIBE_DEFAULT_CONFIG };
+  }
+}
+
+async function saveSubscribeConfig(db: D1Database, cfg: SubscribeConfig): Promise<void> {
+  await ensureSubscribeTables(db);
+  await db
+    .prepare(
+      `INSERT INTO "wl_Settings" ("key","value","updatedAt") VALUES ('subscribe_config',?1,datetime('now'))
+       ON CONFLICT("key") DO UPDATE SET "value"=?1, "updatedAt"=datetime('now')`
+    )
+    .bind(JSON.stringify(cfg))
+    .run();
+}
+
+function randomToken(bytes = 24): string {
+  const a = new Uint8Array(bytes);
+  crypto.getRandomValues(a);
+  return Array.from(a)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+function renderTemplate(tpl: string, vars: Record<string, string>): string {
+  return tpl.replace(/\{\{(\w+)\}\}/g, (_, k: string) => vars[k] ?? "");
+}
+
+function mailSmtp(cfg: SubscribeConfig) {
+  return {
+    host: cfg.host,
+    port: Number(cfg.port),
+    user: cfg.user,
+    pass: cfg.pass,
+    fromName: cfg.fromName,
+    fromEmail: cfg.fromEmail || cfg.user,
+  };
+}
+
+function wrapMailHtml(inner: string): string {
+  return (
+    '<div style="font:14px/1.75 -apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,\'PingFang SC\',\'Microsoft YaHei\',Arial,sans-serif;color:#1f2328">' +
+    inner +
+    "</div>"
+  );
+}
+
+function subscribeResultPage(title: string, message: string, siteUrl?: string): string {
+  const back = siteUrl
+    ? '<p style="margin-top:16px"><a href="' + siteUrl + '" style="color:#f97316">返回站点</a></p>'
+    : "";
+  return (
+    '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">' +
+    '<meta name="viewport" content="width=device-width,initial-scale=1"><title>' +
+    title +
+    "</title></head>" +
+    '<body style="margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;' +
+    "font:14px/1.7 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'PingFang SC','Microsoft YaHei',Arial,sans-serif;" +
+    'background:#f7f7f8;color:#1f2328">' +
+    '<div style="max-width:420px;width:calc(100% - 32px);padding:28px;background:#fff;border:1px solid #e3e3e4;border-radius:6px;text-align:center">' +
+    '<h1 style="margin:0 0 10px;font-size:18px">' +
+    title +
+    '</h1><p style="color:#6b7280;margin:0">' +
+    message +
+    "</p>" +
+    back +
+    "</div></body></html>"
+  );
+}
+
+// 订阅者提交（公开）：POST /api/subscribe  body: {"email":"a@b.com"}
+app.options("/api/subscribe", (c) => new Response(null, { status: 204, headers: VISIT_CORS }));
+
+app.post("/api/subscribe", async (c) => {
+  const db = (c.env as Bindings).DB;
+  const body = (await c.req.json().catch(() => ({}))) as { email?: unknown };
+  const email = String(body?.email ?? "").trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return subscribeJson({ ok: false, error: "邮箱格式不正确" }, 400);
+  }
+  try {
+    const cfg = await getSubscribeConfig(db);
+    if (!cfg.host || !cfg.port) {
+      return subscribeJson({ ok: false, error: "订阅功能尚未配置" }, 503);
+    }
+    const token = randomToken();
+    const ip = c.req.header("cf-connecting-ip") || c.req.header("x-forwarded-for") || "";
+    const ua = c.req.header("user-agent") || "";
+    const status = cfg.needConfirm ? "pending" : "confirmed";
+    await db
+      .prepare(
+        `INSERT INTO "wl_Subscriber" ("email","status","token","ip","ua","confirmedAt")
+         VALUES (?1,?2,?3,?4,?5, CASE WHEN ?2='confirmed' THEN datetime('now') ELSE NULL END)
+         ON CONFLICT("email") DO UPDATE SET "token"=?3,"status"=?2,"ip"=?4,"ua"=?5,"updatedAt"=datetime('now')`
+      )
+      .bind(email, status, token, ip, ua)
+      .run();
+
+    if (cfg.needConfirm) {
+      const origin = new URL(c.req.url).origin;
+      const vars = {
+        site: cfg.siteName || "本站",
+        email,
+        link: origin + "/api/subscribe/confirm?token=" + token,
+        unsubscribe: origin + "/api/subscribe/unsubscribe?token=" + token,
+      };
+      await sendMail(mailSmtp(cfg), {
+        to: email,
+        subject: renderTemplate(cfg.subject, vars),
+        html: wrapMailHtml(renderTemplate(cfg.body, vars)),
+      });
+    }
+    return subscribeJson({
+      ok: true,
+      needConfirm: cfg.needConfirm,
+      message: cfg.needConfirm ? "确认邮件已发送，请查收邮箱完成订阅" : "订阅成功",
+    });
+  } catch (e) {
+    console.error("subscribe failed", e);
+    return subscribeJson(
+      { ok: false, error: "订阅失败：" + (e instanceof Error ? e.message : String(e)) },
+      500
+    );
+  }
+});
+
+// 确认订阅：GET /api/subscribe/confirm?token=xxx
+app.get("/api/subscribe/confirm", async (c) => {
+  const token = c.req.query("token") || "";
+  const cfg = await getSubscribeConfig((c.env as Bindings).DB).catch(
+    () => SUBSCRIBE_DEFAULT_CONFIG
+  );
+  if (!token) {
+    return c.html(subscribeResultPage("链接无效", "缺少确认参数。", cfg.siteUrl), 400);
+  }
+  try {
+    const r = await (c.env as Bindings).DB.prepare(
+      `UPDATE "wl_Subscriber" SET "status"='confirmed',"confirmedAt"=datetime('now'),"updatedAt"=datetime('now') WHERE "token"=?1`
+    )
+      .bind(token)
+      .run();
+    const ok = ((r.meta as { changes?: number } | undefined)?.changes ?? 0) > 0;
+    return c.html(
+      ok
+        ? subscribeResultPage("订阅成功", "你已成功订阅，感谢关注！", cfg.siteUrl)
+        : subscribeResultPage("链接无效", "该确认链接已失效或不存在。", cfg.siteUrl),
+      ok ? 200 : 404
+    );
+  } catch (e) {
+    console.error("subscribe confirm failed", e);
+    return c.html(subscribeResultPage("处理失败", "请稍后重试。", cfg.siteUrl), 500);
+  }
+});
+
+// 退订：GET /api/subscribe/unsubscribe?token=xxx
+app.get("/api/subscribe/unsubscribe", async (c) => {
+  const token = c.req.query("token") || "";
+  const cfg = await getSubscribeConfig((c.env as Bindings).DB).catch(
+    () => SUBSCRIBE_DEFAULT_CONFIG
+  );
+  if (!token) {
+    return c.html(subscribeResultPage("链接无效", "缺少退订参数。", cfg.siteUrl), 400);
+  }
+  try {
+    const r = await (c.env as Bindings).DB.prepare(
+      `UPDATE "wl_Subscriber" SET "status"='unsubscribed',"updatedAt"=datetime('now') WHERE "token"=?1`
+    )
+      .bind(token)
+      .run();
+    const ok = ((r.meta as { changes?: number } | undefined)?.changes ?? 0) > 0;
+    return c.html(
+      ok
+        ? subscribeResultPage("已退订", "你已成功退订，不会再收到邮件。", cfg.siteUrl)
+        : subscribeResultPage("链接无效", "该退订链接已失效或不存在。", cfg.siteUrl),
+      ok ? 200 : 404
+    );
+  } catch (e) {
+    console.error("subscribe unsubscribe failed", e);
+    return c.html(subscribeResultPage("处理失败", "请稍后重试。", cfg.siteUrl), 500);
+  }
+});
+
+// 订阅数统计（公开）：GET /api/subscribe/stats
+app.get("/api/subscribe/stats", async (c) => {
+  try {
+    const db = (c.env as Bindings).DB;
+    await ensureSubscribeTables(db);
+    const row = await db
+      .prepare(
+        `SELECT (SELECT COUNT(*) FROM "wl_Subscriber") AS total,
+                (SELECT COUNT(*) FROM "wl_Subscriber" WHERE "status"='confirmed') AS confirmed`
+      )
+      .first<{ total: number; confirmed: number }>();
+    return subscribeJson({
+      ok: true,
+      total: row?.total ?? 0,
+      confirmed: row?.confirmed ?? 0,
+    });
+  } catch (e) {
+    return subscribeJson({ ok: false, total: 0, confirmed: 0 });
+  }
+});
+
+// 读取订阅/SMTP 配置（管理员，密码不回传）
+app.get("/admin/api/subscribe/settings", async (c) => {
+  if (!isAdmin(c.get("userInfo"))) return json({ error: "unauthorized" }, 401);
+  try {
+    const cfg = await getSubscribeConfig((c.env as Bindings).DB);
+    return json({ ok: true, ...cfg, pass: "", hasPass: !!cfg.pass });
+  } catch (e) {
+    return json({ ok: false, error: String(e) }, 500);
+  }
+});
+
+// 保存订阅/SMTP 配置（管理员，pass 留空表示不修改）
+app.put("/admin/api/subscribe/settings", async (c) => {
+  if (!isAdmin(c.get("userInfo"))) return json({ error: "unauthorized" }, 401);
+  const db = (c.env as Bindings).DB;
+  const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+  const asStr = (v: unknown, fb: string) => (v == null ? fb : String(v));
+  const asBool = (v: unknown, fb: boolean) => (v == null ? fb : !!v);
+  const asNum = (v: unknown, fb: number) => {
+    const n = parseInt(String(v ?? ""), 10);
+    return Number.isFinite(n) && n > 0 && n < 65536 ? n : fb;
+  };
+  try {
+    const cur = await getSubscribeConfig(db);
+    const next: SubscribeConfig = {
+      host: asStr(body.host, cur.host).trim(),
+      port: asNum(body.port, cur.port),
+      user: asStr(body.user, cur.user).trim(),
+      pass: body.pass === undefined || body.pass === "" ? cur.pass : String(body.pass),
+      fromName: asStr(body.fromName, cur.fromName),
+      fromEmail: asStr(body.fromEmail, cur.fromEmail).trim(),
+      secure: asBool(body.secure, cur.secure),
+      siteName: asStr(body.siteName, cur.siteName),
+      siteUrl: asStr(body.siteUrl, cur.siteUrl).trim(),
+      subject: asStr(body.subject, cur.subject),
+      body: asStr(body.body, cur.body),
+      needConfirm: asBool(body.needConfirm, cur.needConfirm),
+    };
+    await saveSubscribeConfig(db, next);
+    return json({ ok: true, ...next, pass: "", hasPass: !!next.pass });
+  } catch (e) {
+    return json({ ok: false, error: String(e) }, 500);
+  }
+});
+
+// 发送测试邮件（管理员）：POST /admin/api/subscribe/test  body {"to":"..."}
+app.post("/admin/api/subscribe/test", async (c) => {
+  if (!isAdmin(c.get("userInfo"))) return json({ error: "unauthorized" }, 401);
+  const body = (await c.req.json().catch(() => ({}))) as { to?: unknown };
+  const to = String(body?.to ?? "").trim();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) {
+    return json({ ok: false, error: "收件邮箱格式不正确" }, 400);
+  }
+  try {
+    const cfg = await getSubscribeConfig((c.env as Bindings).DB);
+    if (!cfg.host || !cfg.port) {
+      return json({ ok: false, error: "请先填写并保存 SMTP 配置" }, 400);
+    }
+    await sendMail(mailSmtp(cfg), {
+      to,
+      subject: "【测试】" + (cfg.siteName || "邮件配置"),
+      html: wrapMailHtml(
+        "<p>这是一封测试邮件。</p><p>收到即表示你的 SMTP 配置可用，可以正常发送订阅邮件了。</p>"
+      ),
+    });
+    return json({ ok: true, message: "测试邮件已发送，请查收" });
+  } catch (e) {
+    console.error("subscribe test failed", e);
+    return json({ ok: false, error: e instanceof Error ? e.message : String(e) }, 500);
+  }
+});
+
+// 订阅者列表（管理员）：GET /admin/api/subscribe/list?status=&q=&page=&pageSize=
+app.get("/admin/api/subscribe/list", async (c) => {
+  if (!isAdmin(c.get("userInfo"))) return json({ error: "unauthorized" }, 401);
+  const db = (c.env as Bindings).DB;
+  try {
+    await ensureSubscribeTables(db);
+    const page = Math.max(1, parseInt(c.req.query("page") || "1", 10) || 1);
+    const pageSize = Math.min(
+      200,
+      Math.max(1, parseInt(c.req.query("pageSize") || "50", 10) || 50)
+    );
+    const status = c.req.query("status") || "";
+    const q = (c.req.query("q") || "").trim();
+    const where: string[] = [];
+    const binds: unknown[] = [];
+    if (["pending", "confirmed", "unsubscribed"].includes(status)) {
+      where.push('"status"=?');
+      binds.push(status);
+    }
+    if (q) {
+      where.push('"email" LIKE ?');
+      binds.push("%" + q + "%");
+    }
+    const clause = where.length ? " WHERE " + where.join(" AND ") : "";
+    const totalRow = await db
+      .prepare(`SELECT COUNT(*) AS count FROM "wl_Subscriber"` + clause)
+      .bind(...binds)
+      .first<{ count: number }>();
+    const rows = await db
+      .prepare(
+        `SELECT "id","email","status","createdAt","confirmedAt" FROM "wl_Subscriber"` +
+          clause +
+          ` ORDER BY "id" DESC LIMIT ? OFFSET ?`
+      )
+      .bind(...binds, pageSize, (page - 1) * pageSize)
+      .all();
+    const stats = await db
+      .prepare(
+        `SELECT (SELECT COUNT(*) FROM "wl_Subscriber") AS total,
+                (SELECT COUNT(*) FROM "wl_Subscriber" WHERE "status"='confirmed') AS confirmed,
+                (SELECT COUNT(*) FROM "wl_Subscriber" WHERE "status"='pending') AS pending,
+                (SELECT COUNT(*) FROM "wl_Subscriber" WHERE "status"='unsubscribed') AS unsubscribed`
+      )
+      .first();
+    return json({
+      ok: true,
+      page,
+      pageSize,
+      total: totalRow?.count ?? 0,
+      stats,
+      list: rows.results || [],
+    });
+  } catch (e) {
+    return json({ ok: false, error: String(e) }, 500);
+  }
+});
+
+// 删除订阅者（管理员）：DELETE /admin/api/subscribe/subscriber?id=1
+app.delete("/admin/api/subscribe/subscriber", async (c) => {
+  if (!isAdmin(c.get("userInfo"))) return json({ error: "unauthorized" }, 401);
+  const id = parseInt(c.req.query("id") || "", 10);
+  if (!Number.isFinite(id)) return json({ error: "id 无效" }, 400);
+  try {
+    await (c.env as Bindings).DB.prepare(`DELETE FROM "wl_Subscriber" WHERE "id"=?1`)
+      .bind(id)
+      .run();
+    return json({ ok: true });
+  } catch (e) {
+    return json({ ok: false, error: String(e) }, 500);
+  }
+});
+
+// 群发邮件给全部已确认订阅者（管理员）：POST /admin/api/subscribe/send
+// body {"subject":"...","body":"<html>"}，单次最多 100 封（避免 Worker 超时）
+app.post("/admin/api/subscribe/send", async (c) => {
+  if (!isAdmin(c.get("userInfo"))) return json({ error: "unauthorized" }, 401);
+  const db = (c.env as Bindings).DB;
+  const body = (await c.req.json().catch(() => ({}))) as {
+    subject?: unknown;
+    body?: unknown;
+  };
+  const subject = String(body?.subject ?? "").trim();
+  const content = String(body?.body ?? "").trim();
+  if (!subject || !content) return json({ ok: false, error: "主题和正文不能为空" }, 400);
+  try {
+    const cfg = await getSubscribeConfig(db);
+    if (!cfg.host || !cfg.port) return json({ ok: false, error: "请先配置 SMTP" }, 400);
+    await ensureSubscribeTables(db);
+    const rows = await db
+      .prepare(`SELECT "email","token" FROM "wl_Subscriber" WHERE "status"='confirmed'`)
+      .all<{ email: string; token: string }>();
+    const list = rows.results || [];
+    if (!list.length) return json({ ok: false, error: "暂无已确认的订阅者" }, 400);
+    const origin = new URL(c.req.url).origin;
+    let sent = 0;
+    let failed = 0;
+    for (const s of list) {
+      if (sent + failed >= 100) break;
+      const vars = {
+        site: cfg.siteName || "本站",
+        email: s.email,
+        unsubscribe: origin + "/api/subscribe/unsubscribe?token=" + s.token,
+      };
+      try {
+        await sendMail(mailSmtp(cfg), {
+          to: s.email,
+          subject: renderTemplate(subject, vars),
+          html: wrapMailHtml(renderTemplate(content, vars)),
+        });
+        sent++;
+      } catch (e) {
+        failed++;
+        console.error("broadcast to " + s.email + " failed", e);
+      }
+    }
+    return json({ ok: true, sent, failed, total: list.length, limited: list.length > 100 });
   } catch (e) {
     return json({ ok: false, error: String(e) }, 500);
   }
