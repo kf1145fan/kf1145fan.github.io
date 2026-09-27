@@ -201,7 +201,7 @@ function getToken(){
 }
 
 // ---------- tab（独立路由 /admin/xxx，SPA 切换：仅改地址栏，绝不刷新）----------
-const TAB_NAMES=['manage','comments','files','build','visit','subscribe','write'];
+const TAB_NAMES=['manage','comments','files','build','visit','subscribe','ai','settings','write'];
 function showPage(name){ activePage=name; $$('.wk-page').forEach(p=>p.classList.toggle('hidden', p.id!=='page-'+name)); }
 // 进入写作页（新建/编辑共用）：首次初始化编辑器与草稿
 let writeInited=false;
@@ -229,8 +229,10 @@ function go(name){
     if(name==='comments') loadComments();
     if(name==='files') loadFiles();
     if(name==='build') loadBuildHistory();
-    if(name==='visit'){ loadVisit(); loadVisitSettings(); }
+    if(name==='visit') loadVisit();
     if(name==='subscribe') loadSubscribe();
+    if(name==='ai'){ /* AI 助手：占位页，暂未开放 */ }
+    if(name==='settings'){ loadSubscribeSettings(); loadSiteSettings(); }
     window.scrollTo(0,0);
   }
   try{ history.replaceState(null,'','/admin/'+name); }catch(e){}
@@ -356,26 +358,39 @@ function applyVisitDays(){
   visitDays = n; loadVisit();
 }
 
-// 数据保留天数（默认 365，可调）
-async function loadVisitSettings(){
+// ---------- 站点设置（设置标签页：数据保留 + 访客评论开关）----------
+async function loadSiteSettings(){
   try{
-    const r = await api('/admin/api/visit/settings');
-    const i = $('#retentionDays');
-    if(r.ok && r.data && i) i.value = r.data.retention_days;
+    const r = await api('/admin/api/site/settings');
+    if(r.ok && r.data){
+      const d = r.data;
+      const rd = $('#retentionDays'); if(rd) rd.value = d.retention_days;
+      const gk = $('#allowGuestComment'); if(gk) gk.checked = !!d.allow_guest_comment;
+    }
   }catch(e){}
 }
-async function saveVisitSettings(){
-  const i = $('#retentionDays');
-  const n = parseInt((i && i.value) || '', 10);
+async function saveSiteSettings(){
+  const rd = $('#retentionDays');
+  const n = parseInt((rd && rd.value) || '', 10);
   if(!Number.isFinite(n) || n < 1 || n > 3650){ toast('保留天数需为 1-3650 的整数', true); return; }
-  const r = await api('/admin/api/visit/settings', { method:'PUT', body: JSON.stringify({ retention_days: n }) });
-  if(r.ok) toast('已保存：数据保留 ' + n + ' 天');
-  else toast('保存失败' + (r.data && r.data.error ? '：' + r.data.error : ''), true);
+  const gk = $('#allowGuestComment');
+  const payload = { retention_days: n, allow_guest_comment: !!(gk && gk.checked) };
+  const r = await api('/admin/api/site/settings', { method:'PUT', body: JSON.stringify(payload) });
+  const msg = $('#siteMsg');
+  if(r.ok){
+    toast('设置已保存');
+    if(msg){ msg.className='msg ok'; msg.textContent='设置已保存'; }
+  } else {
+    const err = (r.data && r.data.error) || '保存失败';
+    toast(err, true);
+    if(msg){ msg.className='msg err'; msg.textContent=err; }
+  }
 }
 
 // ---------- 订阅管理（SMTP 配置 + 订阅者 + 群发）----------
 function subSet(id, v){ const el=$('#'+id); if(el) el.value = (v==null?'':v); }
-async function loadSubscribe(){
+// 仅加载 SMTP/订阅邮件模板（SMTP 字段在「设置」页，模板在「订阅管理」页）
+async function loadSubscribeSettings(){
   try{
     const r = await api('/admin/api/subscribe/settings');
     if(r.ok && r.data){
@@ -385,11 +400,15 @@ async function loadSubscribe(){
       subSet('smSiteName', d.siteName); subSet('smSiteUrl', d.siteUrl);
       subSet('smSubject', d.subject); subSet('smBody', d.body);
       subSet('smNotifySubject', d.notifySubject); subSet('smNotifyBody', d.notifyBody);
+      subSet('smUnsubSubject', d.unsubSubject); subSet('smUnsubBody', d.unsubBody);
       const p = $('#smPass');
       if(p){ p.value=''; p.placeholder = d.hasPass ? '已保存（留空表示不修改）' : '未设置'; }
       const ck = $('#smNeedConfirm'); if(ck) ck.checked = !!d.needConfirm;
     }
   }catch(e){}
+}
+async function loadSubscribe(){
+  await loadSubscribeSettings();
   loadSubscribers();
 }
 async function saveSubscribeSettings(){
@@ -400,7 +419,8 @@ async function saveSubscribeSettings(){
     pass: v('smPass'), fromName: v('smFromName'), fromEmail: v('smFromEmail').trim(),
     siteName: v('smSiteName'), siteUrl: v('smSiteUrl').trim(),
     subject: v('smSubject'), body: v('smBody'), needConfirm: !!(ck && ck.checked),
-    notifySubject: v('smNotifySubject'), notifyBody: v('smNotifyBody')
+    notifySubject: v('smNotifySubject'), notifyBody: v('smNotifyBody'),
+    unsubSubject: v('smUnsubSubject'), unsubBody: v('smUnsubBody')
   };
   const r = await api('/admin/api/subscribe/settings', { method:'PUT', body: JSON.stringify(payload) });
   const msg = $('#subMsg');
@@ -1041,7 +1061,7 @@ document.addEventListener('DOMContentLoaded', ()=>{
 
 export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "manage"): string {
   const repo = String(ghRepo || "");
-  const INITIAL = ["manage","comments","files","build","visit","subscribe","write"].includes(initial)
+  const INITIAL = ["manage","comments","files","build","visit","subscribe","ai","settings","write"].includes(initial)
     ? initial
     : "manage";
   // 服务端就直接渲染出正确的初始页面，避免先闪一下「管理文章」再切过去
@@ -1076,6 +1096,8 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
   <button class="wk-tab ${INITIAL === "build" ? "active" : ""}" data-tab="build">部署记录</button>
   <button class="wk-tab ${INITIAL === "visit" ? "active" : ""}" data-tab="visit">访问量</button>
   <button class="wk-tab ${INITIAL === "subscribe" ? "active" : ""}" data-tab="subscribe">订阅管理</button>
+  <button class="wk-tab ${INITIAL === "ai" ? "active" : ""}" data-tab="ai">AI 助手</button>
+  <button class="wk-tab ${INITIAL === "settings" ? "active" : ""}" data-tab="settings">设置</button>
 </div>
 
 <div class="wk-wrap">
@@ -1204,16 +1226,6 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
     </div>
 
     <div class="wk-card">
-      <h3 class="wk-title">数据保留</h3>
-      <p class="wk-label" style="margin-top:0">默认保留 365 天，可设置更长或更短；超期数据会自动清理。</p>
-      <div class="filters" style="margin:0">
-        <input class="wk-input" id="retentionDays" type="number" min="1" max="3650" style="width:110px" placeholder="365">
-        <span class="wk-label" style="margin:0">天</span>
-        <button class="wk-btn sm" onclick="saveVisitSettings()">保存</button>
-      </div>
-    </div>
-
-    <div class="wk-card">
       <h3 class="wk-title">API 说明</h3>
       <ul class="wk-list">
         <li>
@@ -1250,43 +1262,8 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
     </div>
   </div>
 
-  <!-- 订阅管理（SMTP 配置 + 订阅者 + 群发） -->
+  <!-- 订阅管理（订阅者 + 邮件模板 + 群发；SMTP 配置在「设置」页） -->
   <div id="page-subscribe" class="${pageCls("subscribe")}">
-    <div class="wk-card">
-      <h3 class="wk-title">SMTP 邮件服务器</h3>
-      <p class="wk-label" style="margin-top:0">用于发送订阅确认与群发邮件。<b>Workers 仅支持 465 端口（隐式 TLS）</b>；QQ/163 等邮箱请填写「授权码」而非登录密码。</p>
-      <div class="wk-row">
-        <div style="flex:2">
-          <label class="wk-label">SMTP 服务器</label>
-          <input class="wk-input" id="smHost" placeholder="smtp.qq.com">
-        </div>
-        <div style="flex:1">
-          <label class="wk-label">端口</label>
-          <input class="wk-input" id="smPort" type="number" value="465" placeholder="465">
-        </div>
-      </div>
-      <div class="wk-row">
-        <div style="flex:1">
-          <label class="wk-label">用户名</label>
-          <input class="wk-input" id="smUser" placeholder="you@qq.com">
-        </div>
-        <div style="flex:1">
-          <label class="wk-label">密码 / 授权码</label>
-          <input class="wk-input" id="smPass" type="password" placeholder="留空表示不修改">
-        </div>
-      </div>
-      <div class="wk-row">
-        <div style="flex:1">
-          <label class="wk-label">发件人名称</label>
-          <input class="wk-input" id="smFromName" placeholder="我的博客">
-        </div>
-        <div style="flex:1">
-          <label class="wk-label">发件人邮箱（默认同用户名）</label>
-          <input class="wk-input" id="smFromEmail" placeholder="you@qq.com">
-        </div>
-      </div>
-    </div>
-
     <div class="wk-card">
       <h3 class="wk-title">订阅设置</h3>
       <div class="wk-row">
@@ -1307,14 +1284,16 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
       <input class="wk-input" id="smNotifySubject">
       <label class="wk-label">新文章通知正文（HTML，支持 {{site}} {{title}} {{url}} {{unsubscribe}}）</label>
       <textarea class="wk-input" id="smNotifyBody" rows="6"></textarea>
-      <p class="wk-label" style="margin:6px 0 0;line-height:1.7">只有后台「管理文章 → 添加新文章 → 发布文章」会触发通知，且在博客构建完成后才发送；手动运行工作流不会发邮件。</p>
+      <label class="wk-label" style="margin-top:14px">退订成功提示主题（用户主动点邮件里的退订链接后发送）</label>
+      <input class="wk-input" id="smUnsubSubject">
+      <label class="wk-label">退订成功提示正文（HTML，支持 {{site}} {{email}}）</label>
+      <textarea class="wk-input" id="smUnsubBody" rows="4"></textarea>
+      <p class="wk-label" style="margin:6px 0 0;line-height:1.7">所有通知/群发邮件都会自动带上「取消订阅」按钮；只有订阅人自己点退订链接才会收到这封提示邮件，后台删除订阅者不会发送。</p>
       <label class="wk-label" style="display:flex;align-items:center;gap:6px;margin-top:10px;cursor:pointer">
         <input type="checkbox" id="smNeedConfirm" style="width:auto"> 需要邮件确认（关闭后提交即订阅成功）
       </label>
       <div class="filters" style="margin:14px 0 0">
         <button class="wk-btn sm" onclick="saveSubscribeSettings()">保存配置</button>
-        <input class="wk-input" id="smTestTo" style="width:220px" placeholder="测试收件邮箱">
-        <button class="wk-btn ghost sm" onclick="sendSubscribeTest()">发送测试邮件</button>
       </div>
       <div class="msg" id="subMsg"></div>
     </div>
@@ -1413,6 +1392,94 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
           <div>
             <div class="name"><span class="chip">POST</span> /admin/api/subscribe/send</div>
             <div class="meta">群发邮件（需管理员登录）。body {"subject":"","body":"&lt;html&gt;"}</div>
+          </div>
+        </li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- AI 助手（占位页） -->
+  <div id="page-ai" class="${pageCls("ai")}">
+    <div class="wk-card">
+      <h3 class="wk-title">AI 助手</h3>
+      <div class="empty" style="padding:48px 12px;text-align:center;line-height:1.9">
+        功能开发中，敬请期待。
+      </div>
+    </div>
+  </div>
+
+  <!-- 设置（SMTP 邮件服务器 + 站点功能） -->
+  <div id="page-settings" class="${pageCls("settings")}">
+    <div class="wk-card">
+      <h3 class="wk-title">SMTP 邮件服务器</h3>
+      <p class="wk-label" style="margin-top:0">用于发送订阅确认与群发邮件。<b>Workers 仅支持 465 端口（隐式 TLS）</b>；QQ/163 等邮箱请填写「授权码」而非登录密码。</p>
+      <div class="wk-row">
+        <div style="flex:2">
+          <label class="wk-label">SMTP 服务器</label>
+          <input class="wk-input" id="smHost" placeholder="smtp.qq.com">
+        </div>
+        <div style="flex:1">
+          <label class="wk-label">端口</label>
+          <input class="wk-input" id="smPort" type="number" value="465" placeholder="465">
+        </div>
+      </div>
+      <div class="wk-row">
+        <div style="flex:1">
+          <label class="wk-label">用户名</label>
+          <input class="wk-input" id="smUser" placeholder="you@qq.com">
+        </div>
+        <div style="flex:1">
+          <label class="wk-label">密码 / 授权码</label>
+          <input class="wk-input" id="smPass" type="password" placeholder="留空表示不修改">
+        </div>
+      </div>
+      <div class="wk-row">
+        <div style="flex:1">
+          <label class="wk-label">发件人名称</label>
+          <input class="wk-input" id="smFromName" placeholder="我的博客">
+        </div>
+        <div style="flex:1">
+          <label class="wk-label">发件人邮箱（默认同用户名）</label>
+          <input class="wk-input" id="smFromEmail" placeholder="you@qq.com">
+        </div>
+      </div>
+      <div class="filters" style="margin:14px 0 0">
+        <button class="wk-btn sm" onclick="saveSubscribeSettings()">保存 SMTP 配置</button>
+        <input class="wk-input" id="smTestTo" style="width:220px" placeholder="测试收件邮箱">
+        <button class="wk-btn ghost sm" onclick="sendSubscribeTest()">发送测试邮件</button>
+      </div>
+    </div>
+
+    <div class="wk-card">
+      <h3 class="wk-title">站点功能</h3>
+      <p class="wk-label" style="margin-top:0">默认保留 365 天访问数据，可设置更长或更短；超期数据会自动清理。</p>
+      <div class="filters" style="margin:0 0 12px">
+        <span class="wk-label" style="margin:0">访问量数据保留</span>
+        <input class="wk-input" id="retentionDays" type="number" min="1" max="3650" style="width:110px" placeholder="365">
+        <span class="wk-label" style="margin:0">天</span>
+      </div>
+      <label class="wk-label" style="display:flex;align-items:center;gap:6px;margin-top:6px;cursor:pointer">
+        <input type="checkbox" id="allowGuestComment" style="width:auto"> 允许访客评论（关闭后仅登录用户可评论）
+      </label>
+      <div class="filters" style="margin:14px 0 0">
+        <button class="wk-btn sm" onclick="saveSiteSettings()">保存设置</button>
+      </div>
+      <div class="msg" id="siteMsg"></div>
+    </div>
+
+    <div class="wk-card">
+      <h3 class="wk-title">API 说明</h3>
+      <ul class="wk-list">
+        <li>
+          <div>
+            <div class="name"><span class="chip">GET</span> /admin/api/site/settings</div>
+            <div class="meta">读取站点功能设置（需管理员登录）。返回 {ok, allow_guest_comment, retention_days}</div>
+          </div>
+        </li>
+        <li>
+          <div>
+            <div class="name"><span class="chip">PUT</span> /admin/api/site/settings</div>
+            <div class="meta">保存站点功能设置（需管理员登录）。body {"allow_guest_comment": true, "retention_days": 365}</div>
           </div>
         </li>
       </ul>

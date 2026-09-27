@@ -364,6 +364,63 @@ app.put("/admin/api/visit/settings", async (c) => {
   }
 });
 
+// ---------- 3.55 站点功能设置（访客评论开关、数据保留等）----------
+// 统一存于 wl_Settings，供后台「设置」标签页读写
+async function getSiteSetting(db: D1Database, key: string, fallback: string): Promise<string> {
+  try {
+    const row = await db
+      .prepare(`SELECT "value" FROM "wl_Settings" WHERE "key"=?1`)
+      .bind(key)
+      .first<{ value: string }>();
+    return row?.value ?? fallback;
+  } catch (e) {
+    return fallback;
+  }
+}
+async function setSiteSetting(db: D1Database, key: string, value: string): Promise<void> {
+  await ensureVisitTables(db);
+  await db
+    .prepare(
+      `INSERT INTO "wl_Settings" ("key","value","updatedAt") VALUES (?1,?2,datetime('now'))
+       ON CONFLICT("key") DO UPDATE SET "value"=?2,"updatedAt"=datetime('now')`
+    )
+    .bind(key, value)
+    .run();
+}
+
+app.get("/admin/api/site/settings", async (c) => {
+  if (!isAdmin(c.get("userInfo"))) return json({ error: "unauthorized" }, 401);
+  const db = (c.env as Bindings).DB;
+  try {
+    const allowGuest = (await getSiteSetting(db, "allow_guest_comment", "true")) !== "false";
+    return json({ ok: true, allow_guest_comment: allowGuest, retention_days: await visitRetention(db) });
+  } catch (e) {
+    return json({ ok: false, error: String(e) }, 500);
+  }
+});
+
+app.put("/admin/api/site/settings", async (c) => {
+  if (!isAdmin(c.get("userInfo"))) return json({ error: "unauthorized" }, 401);
+  const db = (c.env as Bindings).DB;
+  const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+  try {
+    if (body.allow_guest_comment !== undefined) {
+      await setSiteSetting(db, "allow_guest_comment", body.allow_guest_comment ? "true" : "false");
+    }
+    if (body.retention_days !== undefined) {
+      const n = parseInt(String(body.retention_days), 10);
+      if (!Number.isFinite(n) || n < 1 || n > 3650) {
+        return json({ error: "retention_days 需为 1-3650 的整数" }, 400);
+      }
+      await setSiteSetting(db, "visit_retention_days", String(n));
+    }
+    const allowGuest = (await getSiteSetting(db, "allow_guest_comment", "true")) !== "false";
+    return json({ ok: true, allow_guest_comment: allowGuest, retention_days: await visitRetention(db) });
+  } catch (e) {
+    return json({ ok: false, error: String(e) }, 500);
+  }
+});
+
 // ---------- 3.6 邮件订阅 API ----------
 // SMTP 配置存于 wl_Settings(key=subscribe_config)，订阅者存于 wl_Subscriber。
 // 公开接口（/api/subscribe*）允许跨域，方便在任意站点调用；管理接口走 /admin/api/*。
@@ -383,6 +440,9 @@ interface SubscribeConfig {
   // 新文章发布通知（构建完成后由工作流回调本 Worker 发送）
   notifySubject: string;
   notifyBody: string;
+  // 退订成功提示（仅用户通过邮件链接主动退订时发送）
+  unsubSubject: string;
+  unsubBody: string;
 }
 
 const SUBSCRIBE_DEFAULT_CONFIG: SubscribeConfig = {
@@ -407,6 +467,10 @@ const SUBSCRIBE_DEFAULT_CONFIG: SubscribeConfig = {
     '<p style="font-size:16px"><a href="{{url}}">{{title}}</a></p>' +
     '<p><a href="{{url}}">阅读全文</a></p>' +
     '<hr><p style="color:#888;font-size:12px"><a href="{{unsubscribe}}">不再接收邮件</a></p>',
+  unsubSubject: "【{{site}}】已成功退订",
+  unsubBody:
+    "<p>你好！</p><p>你已成功退订 <b>{{site}}</b> 的邮件通知，之后不会再收到新文章邮件。</p>" +
+    "<p>如果这不是你本人的操作，可回到站点重新订阅。</p>",
 };
 
 const subscribeJson = (body: unknown, status = 200) =>
@@ -522,6 +586,8 @@ async function broadcastToConfirmed(
     `SELECT "email","token" FROM "wl_Subscriber" WHERE "status"='confirmed'`
   ).all<{ email: string; token: string }>();
   const list = rows.results || [];
+  // 模板未包含退订按钮时，自动在邮件末尾补一个，确保每封邮件都能退订
+  const tplHasUnsub = /\{\{\s*unsubscribe\s*\}\}/.test(bodyTpl);
   let sent = 0;
   let failed = 0;
   for (const s of list) {
@@ -533,10 +599,17 @@ async function broadcastToConfirmed(
       ...extraVars,
     };
     try {
+      let html = renderTemplate(bodyTpl, vars);
+      if (!tplHasUnsub) {
+        html +=
+          '<hr><p style="color:#888;font-size:12px"><a href="' +
+          vars.unsubscribe +
+          '">不再接收邮件</a></p>';
+      }
       await sendMail(mailSmtp(cfg), {
         to: s.email,
         subject: renderTemplate(subjectTpl, vars),
-        html: wrapMailHtml(renderTemplate(bodyTpl, vars)),
+        html: wrapMailHtml(html),
       });
       sent++;
     } catch (e) {
@@ -670,6 +743,30 @@ app.get("/api/subscribe/unsubscribe", async (c) => {
       .bind(token)
       .run();
     const ok = ((r.meta as { changes?: number } | undefined)?.changes ?? 0) > 0;
+    // 用户主动退订成功后，发一封「已退订」提示邮件（后台删除不在此逻辑内）
+    if (ok && cfg.host && cfg.port) {
+      try {
+        const sub = await (c.env as Bindings).DB.prepare(
+          `SELECT "email" FROM "wl_Subscriber" WHERE "token"=?1`
+        )
+          .bind(token)
+          .first<{ email: string }>();
+        if (sub?.email) {
+          const vars = {
+            site: cfg.siteName || "本站",
+            email: sub.email,
+            unsubscribe: new URL(c.req.url).origin + "/api/subscribe/unsubscribe?token=" + token,
+          };
+          await sendMail(mailSmtp(cfg), {
+            to: sub.email,
+            subject: renderTemplate(cfg.unsubSubject, vars),
+            html: wrapMailHtml(renderTemplate(cfg.unsubBody, vars)),
+          });
+        }
+      } catch (e) {
+        console.error("send unsubscribe mail failed", e);
+      }
+    }
     return c.html(
       ok
         ? subscribeResultPage("已退订", "你已成功退订，不会再收到邮件。", cfg.siteUrl)
@@ -742,6 +839,8 @@ app.put("/admin/api/subscribe/settings", async (c) => {
       needConfirm: asBool(body.needConfirm, cur.needConfirm),
       notifySubject: asStr(body.notifySubject, cur.notifySubject),
       notifyBody: asStr(body.notifyBody, cur.notifyBody),
+      unsubSubject: asStr(body.unsubSubject, cur.unsubSubject),
+      unsubBody: asStr(body.unsubBody, cur.unsubBody),
     };
     await saveSubscribeConfig(db, next);
     return json({ ok: true, ...next, pass: "", hasPass: !!next.pass });
@@ -972,6 +1071,10 @@ app.get("/admin/visit", (c) => adminPage(c, "visit"));
 app.get("/admin/visit/", (c) => adminPage(c, "visit"));
 app.get("/admin/subscribe", (c) => adminPage(c, "subscribe"));
 app.get("/admin/subscribe/", (c) => adminPage(c, "subscribe"));
+app.get("/admin/ai", (c) => adminPage(c, "ai"));
+app.get("/admin/ai/", (c) => adminPage(c, "ai"));
+app.get("/admin/settings", (c) => adminPage(c, "settings"));
+app.get("/admin/settings/", (c) => adminPage(c, "settings"));
 
 // ---------- 6. 其余路径：反向代理 GitHub Pages 静态站点 ----------
 app.all("*", async (c) => {

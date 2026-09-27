@@ -92,7 +92,13 @@ commentRoutes.post("/", async (c) => {
 	const statusSettings = await getSettings(c.env.DB, [
 		"comment_default_status",
 		"user_comment_default_status",
+		"allow_guest_comment",
 	]).catch(() => ({}) as Record<string, string>);
+
+	// 访客评论开关（后台「设置」标签页可关闭）：关闭后仅登录用户可评论
+	if (!userInfo && statusSettings.allow_guest_comment === "false") {
+		return c.json({ errno: 1, errmsg: "本站已关闭访客评论，请登录后再评论" }, 403);
+	}
 
 	let status: string;
 	if (userInfo) {
