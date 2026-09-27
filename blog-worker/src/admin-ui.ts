@@ -384,6 +384,7 @@ async function loadSubscribe(){
       subSet('smFromName', d.fromName); subSet('smFromEmail', d.fromEmail);
       subSet('smSiteName', d.siteName); subSet('smSiteUrl', d.siteUrl);
       subSet('smSubject', d.subject); subSet('smBody', d.body);
+      subSet('smNotifySubject', d.notifySubject); subSet('smNotifyBody', d.notifyBody);
       const p = $('#smPass');
       if(p){ p.value=''; p.placeholder = d.hasPass ? '已保存（留空表示不修改）' : '未设置'; }
       const ck = $('#smNeedConfirm'); if(ck) ck.checked = !!d.needConfirm;
@@ -398,7 +399,8 @@ async function saveSubscribeSettings(){
     host: v('smHost').trim(), port: v('smPort'), user: v('smUser').trim(),
     pass: v('smPass'), fromName: v('smFromName'), fromEmail: v('smFromEmail').trim(),
     siteName: v('smSiteName'), siteUrl: v('smSiteUrl').trim(),
-    subject: v('smSubject'), body: v('smBody'), needConfirm: !!(ck && ck.checked)
+    subject: v('smSubject'), body: v('smBody'), needConfirm: !!(ck && ck.checked),
+    notifySubject: v('smNotifySubject'), notifyBody: v('smNotifyBody')
   };
   const r = await api('/admin/api/subscribe/settings', { method:'PUT', body: JSON.stringify(payload) });
   const msg = $('#subMsg');
@@ -1301,6 +1303,11 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
       <input class="wk-input" id="smSubject">
       <label class="wk-label">确认邮件正文（HTML，支持 {{site}} {{email}} {{link}} {{unsubscribe}}）</label>
       <textarea class="wk-input" id="smBody" rows="6"></textarea>
+      <label class="wk-label" style="margin-top:14px">新文章通知主题（发布新文章并构建完成后自动发送）</label>
+      <input class="wk-input" id="smNotifySubject">
+      <label class="wk-label">新文章通知正文（HTML，支持 {{site}} {{title}} {{url}} {{unsubscribe}}）</label>
+      <textarea class="wk-input" id="smNotifyBody" rows="6"></textarea>
+      <p class="wk-label" style="margin:6px 0 0;line-height:1.7">只有后台「管理文章 → 添加新文章 → 发布文章」会触发通知，且在博客构建完成后才发送；手动运行工作流不会发邮件。</p>
       <label class="wk-label" style="display:flex;align-items:center;gap:6px;margin-top:10px;cursor:pointer">
         <input type="checkbox" id="smNeedConfirm" style="width:auto"> 需要邮件确认（关闭后提交即订阅成功）
       </label>

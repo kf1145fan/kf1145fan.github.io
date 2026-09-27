@@ -1,8 +1,22 @@
 name: 仅更新 GitHub Pages
 
 on:
-  # 仅手动触发：重新构建 Hexo 并推送到 gh-pages（不部署 Cloudflare Worker）
+  # 手动触发：重新构建 Hexo 并推送到 gh-pages（不部署 Cloudflare Worker）
+  # 后台「发布新文章」时也会调用本工作流，并带上 notify=true 等参数
   workflow_dispatch:
+    inputs:
+      notify:
+        description: "构建完成后通知订阅者（后台发文自动触发时传 true）"
+        type: string
+        default: "false"
+      post_title:
+        description: "新文章标题（通知邮件用）"
+        type: string
+        default: ""
+      post_url:
+        description: "新文章链接（通知邮件用）"
+        type: string
+        default: ""
 
 permissions:
   contents: write
@@ -36,3 +50,18 @@ jobs:
           git add -A
           git commit -m "deploy: $GITHUB_SHA" -q
           git push -f "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" HEAD:gh-pages -q
+
+      # 构建已完成 → 通知订阅者。只有后台「发布新文章」触发时 notify 才为 true；
+      # 手动运行工作流默认 false，不会发邮件。
+      - name: 通知订阅者（仅后台发文自动触发时执行）
+        if: ${{ inputs.notify == 'true' }}
+        env:
+          NOTIFY_SECRET: ${{ secrets.GH_TOKEN }}
+          POST_TITLE: ${{ inputs.post_title }}
+          POST_URL: ${{ inputs.post_url }}
+        run: |
+          curl -sS -m 60 -X POST "https://blog.902786.xyz/api/internal/notify-published" \
+            -H "Content-Type: application/json" \
+            -H "x-notify-secret: ${NOTIFY_SECRET}" \
+            -d "$(jq -n --arg t "$POST_TITLE" --arg u "$POST_URL" '{title:$t,url:$u}')"
+          echo ""

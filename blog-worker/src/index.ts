@@ -380,6 +380,9 @@ interface SubscribeConfig {
   subject: string;
   body: string;
   needConfirm: boolean;
+  // 新文章发布通知（构建完成后由工作流回调本 Worker 发送）
+  notifySubject: string;
+  notifyBody: string;
 }
 
 const SUBSCRIBE_DEFAULT_CONFIG: SubscribeConfig = {
@@ -398,6 +401,12 @@ const SUBSCRIBE_DEFAULT_CONFIG: SubscribeConfig = {
     '<p>请点击下面的链接确认订阅：</p><p><a href="{{link}}">{{link}}</a></p>' +
     '<p>如果不是你本人操作，请忽略这封邮件。</p>',
   needConfirm: true,
+  notifySubject: "【{{site}}】新文章：{{title}}",
+  notifyBody:
+    "<p>你好！</p><p><b>{{site}}</b> 发布了新文章：</p>" +
+    '<p style="font-size:16px"><a href="{{url}}">{{title}}</a></p>' +
+    '<p><a href="{{url}}">阅读全文</a></p>' +
+    '<hr><p style="color:#888;font-size:12px"><a href="{{unsubscribe}}">不再接收邮件</a></p>',
 };
 
 const subscribeJson = (body: unknown, status = 200) =>
@@ -496,6 +505,46 @@ function wrapMailHtml(inner: string): string {
     inner +
     "</div>"
   );
+}
+
+// 群发给全部已确认订阅者（单次上限 100 封，避免 Worker 超时）
+async function broadcastToConfirmed(
+  env: Bindings,
+  subjectTpl: string,
+  bodyTpl: string,
+  extraVars: Record<string, string>,
+  origin: string
+): Promise<{ sent: number; failed: number; total: number }> {
+  const cfg = await getSubscribeConfig(env.DB);
+  if (!cfg.host || !cfg.port) throw new Error("请先配置 SMTP");
+  await ensureSubscribeTables(env.DB);
+  const rows = await env.DB.prepare(
+    `SELECT "email","token" FROM "wl_Subscriber" WHERE "status"='confirmed'`
+  ).all<{ email: string; token: string }>();
+  const list = rows.results || [];
+  let sent = 0;
+  let failed = 0;
+  for (const s of list) {
+    if (sent + failed >= 100) break;
+    const vars: Record<string, string> = {
+      site: cfg.siteName || "本站",
+      email: s.email,
+      unsubscribe: origin + "/api/subscribe/unsubscribe?token=" + s.token,
+      ...extraVars,
+    };
+    try {
+      await sendMail(mailSmtp(cfg), {
+        to: s.email,
+        subject: renderTemplate(subjectTpl, vars),
+        html: wrapMailHtml(renderTemplate(bodyTpl, vars)),
+      });
+      sent++;
+    } catch (e) {
+      failed++;
+      console.error("broadcast to " + s.email + " failed", e);
+    }
+  }
+  return { sent, failed, total: list.length };
 }
 
 function subscribeResultPage(title: string, message: string, siteUrl?: string): string {
@@ -691,6 +740,8 @@ app.put("/admin/api/subscribe/settings", async (c) => {
       subject: asStr(body.subject, cur.subject),
       body: asStr(body.body, cur.body),
       needConfirm: asBool(body.needConfirm, cur.needConfirm),
+      notifySubject: asStr(body.notifySubject, cur.notifySubject),
+      notifyBody: asStr(body.notifyBody, cur.notifyBody),
     };
     await saveSubscribeConfig(db, next);
     return json({ ok: true, ...next, pass: "", hasPass: !!next.pass });
@@ -802,7 +853,6 @@ app.delete("/admin/api/subscribe/subscriber", async (c) => {
 // body {"subject":"...","body":"<html>"}，单次最多 100 封（避免 Worker 超时）
 app.post("/admin/api/subscribe/send", async (c) => {
   if (!isAdmin(c.get("userInfo"))) return json({ error: "unauthorized" }, 401);
-  const db = (c.env as Bindings).DB;
   const body = (await c.req.json().catch(() => ({}))) as {
     subject?: unknown;
     body?: unknown;
@@ -811,39 +861,42 @@ app.post("/admin/api/subscribe/send", async (c) => {
   const content = String(body?.body ?? "").trim();
   if (!subject || !content) return json({ ok: false, error: "主题和正文不能为空" }, 400);
   try {
-    const cfg = await getSubscribeConfig(db);
-    if (!cfg.host || !cfg.port) return json({ ok: false, error: "请先配置 SMTP" }, 400);
-    await ensureSubscribeTables(db);
-    const rows = await db
-      .prepare(`SELECT "email","token" FROM "wl_Subscriber" WHERE "status"='confirmed'`)
-      .all<{ email: string; token: string }>();
-    const list = rows.results || [];
-    if (!list.length) return json({ ok: false, error: "暂无已确认的订阅者" }, 400);
     const origin = new URL(c.req.url).origin;
-    let sent = 0;
-    let failed = 0;
-    for (const s of list) {
-      if (sent + failed >= 100) break;
-      const vars = {
-        site: cfg.siteName || "本站",
-        email: s.email,
-        unsubscribe: origin + "/api/subscribe/unsubscribe?token=" + s.token,
-      };
-      try {
-        await sendMail(mailSmtp(cfg), {
-          to: s.email,
-          subject: renderTemplate(subject, vars),
-          html: wrapMailHtml(renderTemplate(content, vars)),
-        });
-        sent++;
-      } catch (e) {
-        failed++;
-        console.error("broadcast to " + s.email + " failed", e);
-      }
-    }
-    return json({ ok: true, sent, failed, total: list.length, limited: list.length > 100 });
+    const r = await broadcastToConfirmed(c.env as Bindings, subject, content, {}, origin);
+    if (!r.total) return json({ ok: false, error: "暂无已确认的订阅者" }, 400);
+    return json({ ok: true, ...r, limited: r.total > 100 });
   } catch (e) {
-    return json({ ok: false, error: String(e) }, 500);
+    return json({ ok: false, error: e instanceof Error ? e.message : String(e) }, 500);
+  }
+});
+
+// 新文章发布通知（内部接口）：由 GitHub Actions 在博客构建完成后回调
+// 鉴权：请求头 x-notify-secret 必须等于 Worker 的 GH_TOKEN（与工作流的 secrets.GH_TOKEN 同值）
+// body {"title":"文章标题","url":"文章链接"}
+app.post("/api/internal/notify-published", async (c) => {
+  const env = c.env as Bindings;
+  const secret = c.req.header("x-notify-secret") || "";
+  if (!env.GH_TOKEN || secret !== env.GH_TOKEN) {
+    return json({ error: "unauthorized" }, 401);
+  }
+  const body = (await c.req.json().catch(() => ({}))) as { title?: unknown; url?: unknown };
+  const title = String(body?.title ?? "").trim();
+  const url = String(body?.url ?? "").trim();
+  if (!title) return json({ ok: false, error: "title required" }, 400);
+  try {
+    const cfg = await getSubscribeConfig(env.DB);
+    const origin = new URL(c.req.url).origin;
+    const r = await broadcastToConfirmed(
+      env,
+      cfg.notifySubject,
+      cfg.notifyBody,
+      { title, url },
+      origin
+    );
+    return json({ ok: true, ...r });
+  } catch (e) {
+    console.error("notify published failed", e);
+    return json({ ok: false, error: e instanceof Error ? e.message : String(e) }, 500);
   }
 });
 
@@ -1090,7 +1143,44 @@ async function handleWritePost(
     const res = await fetch(rawApi, { method: "PUT", headers, body: JSON.stringify(payload) });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) return json({ ok: false, error: "github error: " + (data as any).message || res.status }, 502);
-    return json({ ok: true, path, filename, message: "已提交，工作流会自动重建博客" });
+
+    // 仅「添加新文章」时触发构建，并在构建完成后由工作流回调通知订阅者。
+    // 手动运行工作流不会带 notify 参数，所以不会发邮件。
+    let notifyPipeline = false;
+    if (!isUpdate) {
+      const pagesUrl = (env.PAGES_URL || "").replace(/\/+$/, "");
+      const pageTitle = filename.replace(/\.md$/, "");
+      const postUrl = pagesUrl
+        ? pagesUrl +
+          "/" +
+          (date.replace(/-/g, "/") + "/" + pageTitle)
+            .split("/")
+            .map(encodeURIComponent)
+            .join("/") +
+          "/"
+        : path;
+      const disp = await fetch(
+        `https://api.github.com/repos/${repo}/actions/workflows/update-gh.yml/dispatches`,
+        {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            ref: branch,
+            inputs: { notify: "true", post_title: title, post_url: postUrl },
+          }),
+        }
+      ).catch(() => null);
+      notifyPipeline = !!disp && disp.ok;
+    }
+    return json({
+      ok: true,
+      path,
+      filename,
+      notifyPipeline,
+      message: notifyPipeline
+        ? "已提交，正在构建博客；构建完成后会自动邮件通知订阅者"
+        : "已提交，工作流会自动重建博客",
+    });
   } catch (e) {
     return json({ ok: false, error: String(e) }, 500);
   }
