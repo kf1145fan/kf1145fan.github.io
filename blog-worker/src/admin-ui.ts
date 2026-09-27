@@ -49,6 +49,15 @@ a{color:var(--accent);text-decoration:none}
 .wk-card{background:var(--card);border:1px solid var(--border);border-radius:2px;padding:16px}
 .wk-card+.wk-card{margin-top:12px}
 .wk-title{font-size:14px;font-weight:600;margin:0 0 12px;padding-bottom:8px;border-bottom:1px solid var(--border)}
+/* 可展开/收起的卡片（设置页） */
+.wk-collapse{background:var(--card);border:1px solid var(--border);border-radius:2px;overflow:hidden}
+.wk-collapse+.wk-collapse{margin-top:12px}
+.wk-collapse>summary{list-style:none;cursor:pointer;padding:12px 16px;font-size:14px;font-weight:600;color:var(--fg);display:flex;align-items:center;justify-content:space-between;gap:10px;user-select:none;-webkit-tap-highlight-color:transparent}
+.wk-collapse>summary::-webkit-details-marker{display:none}
+.wk-collapse>summary::after{content:'▾';color:var(--muted);font-size:12px;line-height:1;transition:transform .2s}
+.wk-collapse[open]>summary::after{transform:rotate(180deg)}
+.wk-collapse>summary:hover{background:var(--hover)}
+.wk-collapse .wk-collapse-body{padding:2px 16px 16px;border-top:1px solid var(--border)}
 /* 表单 */
 .wk-label{font-size:12px;color:var(--muted);margin:8px 0 4px;display:block}
 .wk-input{width:100%;border:1px solid var(--border);border-radius:3px;padding:6px 10px;font-size:13px;font-family:inherit;outline:none;background:var(--input-bg);color:var(--fg)}
@@ -1224,80 +1233,10 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
       <div id="visitChart"><div class="empty">加载中...</div></div>
       <p class="wk-label" style="margin:8px 0 0">图中区间合计：<b id="visitRangeSum">-</b></p>
     </div>
-
-    <div class="wk-card">
-      <h3 class="wk-title">API 说明</h3>
-      <ul class="wk-list">
-        <li>
-          <div>
-            <div class="name"><span class="chip">POST</span> /api/visit</div>
-            <div class="meta">记录一次访问（前台调用）。同一访客同一天只计一次，刷新不重复。返回 {ok, counted, today, total}</div>
-          </div>
-        </li>
-        <li>
-          <div>
-            <div class="name"><span class="chip">GET</span> /api/visit/stats</div>
-            <div class="meta">查询访问量。返回 {ok, today, total}，today 按东八区计算</div>
-          </div>
-        </li>
-        <li>
-          <div>
-            <div class="name"><span class="chip">GET</span> /admin/api/visit/daily?days=30</div>
-            <div class="meta">按天趋势（需管理员登录）。days 取值 1-3650，返回 {ok, days, sum, series:[{day,count}]}</div>
-          </div>
-        </li>
-        <li>
-          <div>
-            <div class="name"><span class="chip">GET</span> /admin/api/visit/settings</div>
-            <div class="meta">读取数据保留天数（需管理员登录）。返回 {ok, retention_days}</div>
-          </div>
-        </li>
-        <li>
-          <div>
-            <div class="name"><span class="chip">PUT</span> /admin/api/visit/settings</div>
-            <div class="meta">保存数据保留天数（需管理员登录）。请求体 {"retention_days": 365}，取值 1-3650</div>
-          </div>
-        </li>
-      </ul>
-    </div>
   </div>
 
-  <!-- 订阅管理（订阅者 + 邮件模板 + 群发；SMTP 配置在「设置」页） -->
+  <!-- 订阅管理（订阅者 + 群发；订阅设置(邮件模板)、SMTP 均在「设置」页） -->
   <div id="page-subscribe" class="${pageCls("subscribe")}">
-    <div class="wk-card">
-      <h3 class="wk-title">订阅设置</h3>
-      <div class="wk-row">
-        <div style="flex:1">
-          <label class="wk-label">站点名称</label>
-          <input class="wk-input" id="smSiteName" placeholder="我的博客">
-        </div>
-        <div style="flex:1">
-          <label class="wk-label">站点地址</label>
-          <input class="wk-input" id="smSiteUrl" placeholder="https://blog.example.com">
-        </div>
-      </div>
-      <label class="wk-label">确认邮件主题</label>
-      <input class="wk-input" id="smSubject">
-      <label class="wk-label">确认邮件正文（HTML，支持 {{site}} {{email}} {{link}} {{unsubscribe}}）</label>
-      <textarea class="wk-input" id="smBody" rows="6"></textarea>
-      <label class="wk-label" style="margin-top:14px">新文章通知主题（发布新文章并构建完成后自动发送）</label>
-      <input class="wk-input" id="smNotifySubject">
-      <label class="wk-label">新文章通知正文（HTML，支持 {{site}} {{title}} {{url}} {{unsubscribe}}）</label>
-      <textarea class="wk-input" id="smNotifyBody" rows="6"></textarea>
-      <label class="wk-label" style="margin-top:14px">退订成功提示主题（用户主动点邮件里的退订链接后发送）</label>
-      <input class="wk-input" id="smUnsubSubject">
-      <label class="wk-label">退订成功提示正文（HTML，支持 {{site}} {{email}}）</label>
-      <textarea class="wk-input" id="smUnsubBody" rows="4"></textarea>
-      <p class="wk-label" style="margin:6px 0 0;line-height:1.7">所有通知/群发邮件都会自动带上「取消订阅」按钮；只有订阅人自己点退订链接才会收到这封提示邮件，后台删除订阅者不会发送。</p>
-      <label class="wk-label" style="display:flex;align-items:center;gap:6px;margin-top:10px;cursor:pointer">
-        <input type="checkbox" id="smNeedConfirm" style="width:auto"> 需要邮件确认（关闭后提交即订阅成功）
-      </label>
-      <div class="filters" style="margin:14px 0 0">
-        <button class="wk-btn sm" onclick="saveSubscribeSettings()">保存配置</button>
-      </div>
-      <div class="msg" id="subMsg"></div>
-    </div>
-
     <div class="wk-card">
       <h3 class="wk-title">订阅者</h3>
       <div class="stats-scroll"><div class="stats">
@@ -1330,72 +1269,6 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
         <span class="wk-label" style="margin:0;align-self:center">单次上限 100 封</span>
       </div>
     </div>
-
-    <div class="wk-card">
-      <h3 class="wk-title">API 说明</h3>
-      <ul class="wk-list">
-        <li>
-          <div>
-            <div class="name"><span class="chip">POST</span> /api/subscribe</div>
-            <div class="meta">提交订阅（前台调用，允许跨域）。body {"email":"a@b.com"}；返回 {ok, needConfirm, message}</div>
-          </div>
-        </li>
-        <li>
-          <div>
-            <div class="name"><span class="chip">GET</span> /api/subscribe/confirm?token=xxx</div>
-            <div class="meta">确认订阅（邮件里的链接）。返回一个提示页面</div>
-          </div>
-        </li>
-        <li>
-          <div>
-            <div class="name"><span class="chip">GET</span> /api/subscribe/unsubscribe?token=xxx</div>
-            <div class="meta">退订（邮件里的链接）。返回一个提示页面</div>
-          </div>
-        </li>
-        <li>
-          <div>
-            <div class="name"><span class="chip">GET</span> /api/subscribe/stats</div>
-            <div class="meta">订阅数统计。返回 {ok, total, confirmed}</div>
-          </div>
-        </li>
-        <li>
-          <div>
-            <div class="name"><span class="chip">GET</span> /admin/api/subscribe/settings</div>
-            <div class="meta">读取 SMTP/订阅配置（需管理员登录）。返回配置，密码以 hasPass 表示</div>
-          </div>
-        </li>
-        <li>
-          <div>
-            <div class="name"><span class="chip">PUT</span> /admin/api/subscribe/settings</div>
-            <div class="meta">保存配置（需管理员登录）。pass 留空表示不修改</div>
-          </div>
-        </li>
-        <li>
-          <div>
-            <div class="name"><span class="chip">GET</span> /admin/api/subscribe/list?status=&q=</div>
-            <div class="meta">订阅者列表（需管理员登录）。返回 {ok, total, stats, list:[{id,email,status,createdAt}]}</div>
-          </div>
-        </li>
-        <li>
-          <div>
-            <div class="name"><span class="chip">DELETE</span> /admin/api/subscribe/subscriber?id=1</div>
-            <div class="meta">删除订阅者（需管理员登录）</div>
-          </div>
-        </li>
-        <li>
-          <div>
-            <div class="name"><span class="chip">POST</span> /admin/api/subscribe/test</div>
-            <div class="meta">发送测试邮件（需管理员登录）。body {"to":"a@b.com"}</div>
-          </div>
-        </li>
-        <li>
-          <div>
-            <div class="name"><span class="chip">POST</span> /admin/api/subscribe/send</div>
-            <div class="meta">群发邮件（需管理员登录）。body {"subject":"","body":"&lt;html&gt;"}</div>
-          </div>
-        </li>
-      </ul>
-    </div>
   </div>
 
   <!-- AI 助手（占位页） -->
@@ -1408,82 +1281,210 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
     </div>
   </div>
 
-  <!-- 设置（SMTP 邮件服务器 + 站点功能） -->
+  <!-- 设置（各分区可展开/收起：SMTP、站点功能、订阅设置、API 说明） -->
   <div id="page-settings" class="${pageCls("settings")}">
-    <div class="wk-card">
-      <h3 class="wk-title">SMTP 邮件服务器</h3>
-      <p class="wk-label" style="margin-top:0">用于发送订阅确认与群发邮件。<b>Workers 仅支持 465 端口（隐式 TLS）</b>；QQ/163 等邮箱请填写「授权码」而非登录密码。</p>
-      <div class="wk-row">
-        <div style="flex:2">
-          <label class="wk-label">SMTP 服务器</label>
-          <input class="wk-input" id="smHost" placeholder="smtp.qq.com">
-        </div>
-        <div style="flex:1">
-          <label class="wk-label">端口</label>
-          <input class="wk-input" id="smPort" type="number" value="465" placeholder="465">
-        </div>
-      </div>
-      <div class="wk-row">
-        <div style="flex:1">
-          <label class="wk-label">用户名</label>
-          <input class="wk-input" id="smUser" placeholder="you@qq.com">
-        </div>
-        <div style="flex:1">
-          <label class="wk-label">密码 / 授权码</label>
-          <input class="wk-input" id="smPass" type="password" placeholder="留空表示不修改">
-        </div>
-      </div>
-      <div class="wk-row">
-        <div style="flex:1">
-          <label class="wk-label">发件人名称</label>
-          <input class="wk-input" id="smFromName" placeholder="我的博客">
-        </div>
-        <div style="flex:1">
-          <label class="wk-label">发件人邮箱（默认同用户名）</label>
-          <input class="wk-input" id="smFromEmail" placeholder="you@qq.com">
-        </div>
-      </div>
-      <div class="filters" style="margin:14px 0 0">
-        <button class="wk-btn sm" onclick="saveSubscribeSettings()">保存 SMTP 配置</button>
-        <input class="wk-input" id="smTestTo" style="width:220px" placeholder="测试收件邮箱">
-        <button class="wk-btn ghost sm" onclick="sendSubscribeTest()">发送测试邮件</button>
-      </div>
-    </div>
-
-    <div class="wk-card">
-      <h3 class="wk-title">站点功能</h3>
-      <p class="wk-label" style="margin-top:0">默认保留 365 天访问数据，可设置更长或更短；超期数据会自动清理。</p>
-      <div class="filters" style="margin:0 0 12px">
-        <span class="wk-label" style="margin:0">访问量数据保留</span>
-        <input class="wk-input" id="retentionDays" type="number" min="1" max="3650" style="width:110px" placeholder="365">
-        <span class="wk-label" style="margin:0">天</span>
-      </div>
-      <label class="wk-label" style="display:flex;align-items:center;gap:6px;margin-top:6px;cursor:pointer">
-        <input type="checkbox" id="allowGuestComment" style="width:auto"> 允许访客评论（关闭后仅登录用户可评论）
-      </label>
-      <div class="filters" style="margin:14px 0 0">
-        <button class="wk-btn sm" onclick="saveSiteSettings()">保存设置</button>
-      </div>
-      <div class="msg" id="siteMsg"></div>
-    </div>
-
-    <div class="wk-card">
-      <h3 class="wk-title">API 说明</h3>
-      <ul class="wk-list">
-        <li>
-          <div>
-            <div class="name"><span class="chip">GET</span> /admin/api/site/settings</div>
-            <div class="meta">读取站点功能设置（需管理员登录）。返回 {ok, allow_guest_comment, retention_days}</div>
+    <details class="wk-collapse">
+      <summary>SMTP 邮件服务器</summary>
+      <div class="wk-collapse-body">
+        <p class="wk-label" style="margin-top:0">用于发送订阅确认与群发邮件。<b>Workers 仅支持 465 端口（隐式 TLS）</b>；QQ/163 等邮箱请填写「授权码」而非登录密码。</p>
+        <div class="wk-row">
+          <div style="flex:2">
+            <label class="wk-label">SMTP 服务器</label>
+            <input class="wk-input" id="smHost" placeholder="smtp.qq.com">
           </div>
-        </li>
-        <li>
-          <div>
-            <div class="name"><span class="chip">PUT</span> /admin/api/site/settings</div>
-            <div class="meta">保存站点功能设置（需管理员登录）。body {"allow_guest_comment": true, "retention_days": 365}</div>
+          <div style="flex:1">
+            <label class="wk-label">端口</label>
+            <input class="wk-input" id="smPort" type="number" value="465" placeholder="465">
           </div>
-        </li>
-      </ul>
-    </div>
+        </div>
+        <div class="wk-row">
+          <div style="flex:1">
+            <label class="wk-label">用户名</label>
+            <input class="wk-input" id="smUser" placeholder="you@qq.com">
+          </div>
+          <div style="flex:1">
+            <label class="wk-label">密码 / 授权码</label>
+            <input class="wk-input" id="smPass" type="password" placeholder="留空表示不修改">
+          </div>
+        </div>
+        <div class="wk-row">
+          <div style="flex:1">
+            <label class="wk-label">发件人名称</label>
+            <input class="wk-input" id="smFromName" placeholder="我的博客">
+          </div>
+          <div style="flex:1">
+            <label class="wk-label">发件人邮箱（默认同用户名）</label>
+            <input class="wk-input" id="smFromEmail" placeholder="you@qq.com">
+          </div>
+        </div>
+        <div class="filters" style="margin:14px 0 0">
+          <button class="wk-btn sm" onclick="saveSubscribeSettings()">保存 SMTP 配置</button>
+          <input class="wk-input" id="smTestTo" style="width:220px" placeholder="测试收件邮箱">
+          <button class="wk-btn ghost sm" onclick="sendSubscribeTest()">发送测试邮件</button>
+        </div>
+      </div>
+    </details>
+
+    <details class="wk-collapse">
+      <summary>站点功能</summary>
+      <div class="wk-collapse-body">
+        <p class="wk-label" style="margin-top:0">默认保留 365 天访问数据，可设置更长或更短；超期数据会自动清理。</p>
+        <div class="filters" style="margin:0 0 12px">
+          <span class="wk-label" style="margin:0">访问量数据保留</span>
+          <input class="wk-input" id="retentionDays" type="number" min="1" max="3650" style="width:110px" placeholder="365">
+          <span class="wk-label" style="margin:0">天</span>
+        </div>
+        <label class="wk-label" style="display:flex;align-items:center;gap:6px;margin-top:6px;cursor:pointer">
+          <input type="checkbox" id="allowGuestComment" style="width:auto"> 允许访客评论（关闭后仅登录用户可评论）
+        </label>
+        <div class="filters" style="margin:14px 0 0">
+          <button class="wk-btn sm" onclick="saveSiteSettings()">保存设置</button>
+        </div>
+        <div class="msg" id="siteMsg"></div>
+      </div>
+    </details>
+
+    <details class="wk-collapse">
+      <summary>订阅设置（邮件模板）</summary>
+      <div class="wk-collapse-body">
+        <div class="wk-row">
+          <div style="flex:1">
+            <label class="wk-label">站点名称</label>
+            <input class="wk-input" id="smSiteName" placeholder="我的博客">
+          </div>
+          <div style="flex:1">
+            <label class="wk-label">站点地址</label>
+            <input class="wk-input" id="smSiteUrl" placeholder="https://blog.example.com">
+          </div>
+        </div>
+        <label class="wk-label">确认邮件主题</label>
+        <input class="wk-input" id="smSubject">
+        <label class="wk-label">确认邮件正文（HTML，支持 {{site}} {{email}} {{link}} {{unsubscribe}}）</label>
+        <textarea class="wk-input" id="smBody" rows="6"></textarea>
+        <label class="wk-label" style="margin-top:14px">新文章通知主题（发布新文章并构建完成后自动发送）</label>
+        <input class="wk-input" id="smNotifySubject">
+        <label class="wk-label">新文章通知正文（HTML，支持 {{site}} {{title}} {{url}} {{unsubscribe}}）</label>
+        <textarea class="wk-input" id="smNotifyBody" rows="6"></textarea>
+        <label class="wk-label" style="margin-top:14px">退订成功提示主题（用户主动点邮件里的退订链接后发送）</label>
+        <input class="wk-input" id="smUnsubSubject">
+        <label class="wk-label">退订成功提示正文（HTML，支持 {{site}} {{email}}）</label>
+        <textarea class="wk-input" id="smUnsubBody" rows="4"></textarea>
+        <p class="wk-label" style="margin:6px 0 0;line-height:1.7">所有通知/群发邮件都会自动带上「取消订阅」按钮；只有订阅人自己点退订链接才会收到这封提示邮件，后台删除订阅者不会发送。</p>
+        <label class="wk-label" style="display:flex;align-items:center;gap:6px;margin-top:10px;cursor:pointer">
+          <input type="checkbox" id="smNeedConfirm" style="width:auto"> 需要邮件确认（关闭后提交即订阅成功）
+        </label>
+        <div class="filters" style="margin:14px 0 0">
+          <button class="wk-btn sm" onclick="saveSubscribeSettings()">保存配置</button>
+        </div>
+        <div class="msg" id="subMsg"></div>
+      </div>
+    </details>
+
+    <details class="wk-collapse">
+      <summary>API 说明（访问量）</summary>
+      <div class="wk-collapse-body">
+        <ul class="wk-list">
+          <li>
+            <div>
+              <div class="name"><span class="chip">POST</span> /api/visit</div>
+              <div class="meta">记录一次访问（前台调用）。同一访客同一天只计一次，刷新不重复。返回 {ok, counted, today, total}</div>
+            </div>
+          </li>
+          <li>
+            <div>
+              <div class="name"><span class="chip">GET</span> /api/visit/stats</div>
+              <div class="meta">查询访问量。返回 {ok, today, total}，today 按东八区计算</div>
+            </div>
+          </li>
+          <li>
+            <div>
+              <div class="name"><span class="chip">GET</span> /admin/api/visit/daily?days=30</div>
+              <div class="meta">按天趋势（需管理员登录）。days 取值 1-3650，返回 {ok, days, sum, series:[{day,count}]}</div>
+            </div>
+          </li>
+          <li>
+            <div>
+              <div class="name"><span class="chip">GET</span> /admin/api/visit/settings</div>
+              <div class="meta">读取数据保留天数（需管理员登录）。返回 {ok, retention_days}</div>
+            </div>
+          </li>
+          <li>
+            <div>
+              <div class="name"><span class="chip">PUT</span> /admin/api/visit/settings</div>
+              <div class="meta">保存数据保留天数（需管理员登录）。请求体 {"retention_days": 365}，取值 1-3650</div>
+            </div>
+          </li>
+        </ul>
+      </div>
+    </details>
+
+    <details class="wk-collapse">
+      <summary>API 说明（订阅）</summary>
+      <div class="wk-collapse-body">
+        <ul class="wk-list">
+          <li>
+            <div>
+              <div class="name"><span class="chip">POST</span> /api/subscribe</div>
+              <div class="meta">提交订阅（前台调用，允许跨域）。body {"email":"a@b.com"}；返回 {ok, needConfirm, message}</div>
+            </div>
+          </li>
+          <li>
+            <div>
+              <div class="name"><span class="chip">GET</span> /api/subscribe/confirm?token=xxx</div>
+              <div class="meta">确认订阅（邮件里的链接）。返回一个提示页面</div>
+            </div>
+          </li>
+          <li>
+            <div>
+              <div class="name"><span class="chip">GET</span> /api/subscribe/unsubscribe?token=xxx</div>
+              <div class="meta">退订（邮件里的链接）。返回一个提示页面</div>
+            </div>
+          </li>
+          <li>
+            <div>
+              <div class="name"><span class="chip">GET</span> /api/subscribe/stats</div>
+              <div class="meta">订阅数统计。返回 {ok, total, confirmed}</div>
+            </div>
+          </li>
+          <li>
+            <div>
+              <div class="name"><span class="chip">GET</span> /admin/api/subscribe/settings</div>
+              <div class="meta">读取 SMTP/订阅配置（需管理员登录）。返回配置，密码以 hasPass 表示</div>
+            </div>
+          </li>
+          <li>
+            <div>
+              <div class="name"><span class="chip">PUT</span> /admin/api/subscribe/settings</div>
+              <div class="meta">保存配置（需管理员登录）。pass 留空表示不修改</div>
+            </div>
+          </li>
+          <li>
+            <div>
+              <div class="name"><span class="chip">GET</span> /admin/api/subscribe/list?status=&q=</div>
+              <div class="meta">订阅者列表（需管理员登录）。返回 {ok, total, stats, list:[{id,email,status,createdAt}]}</div>
+            </div>
+          </li>
+          <li>
+            <div>
+              <div class="name"><span class="chip">DELETE</span> /admin/api/subscribe/subscriber?id=1</div>
+              <div class="meta">删除订阅者（需管理员登录，不会给该邮箱发退订提示）</div>
+            </div>
+          </li>
+          <li>
+            <div>
+              <div class="name"><span class="chip">POST</span> /admin/api/subscribe/test</div>
+              <div class="meta">发送测试邮件（需管理员登录）。body {"to":"a@b.com"}</div>
+            </div>
+          </li>
+          <li>
+            <div>
+              <div class="name"><span class="chip">POST</span> /admin/api/subscribe/send</div>
+              <div class="meta">群发邮件（需管理员登录）。body {"subject":"","body":"&lt;html&gt;"}</div>
+            </div>
+          </li>
+        </ul>
+      </div>
+    </details>
   </div>
 
 </div>
