@@ -459,6 +459,8 @@ interface SubscribeConfig {
   // 退订成功提示（仅用户通过邮件链接主动退订时发送）
   unsubSubject: string;
   unsubBody: string;
+  // 当日最多订阅量（按东八区计日）：达到上限后当天不再接受新订阅，用于暴力防刷
+  dailyLimit: number;
 }
 
 const SUBSCRIBE_DEFAULT_CONFIG: SubscribeConfig = {
@@ -487,6 +489,7 @@ const SUBSCRIBE_DEFAULT_CONFIG: SubscribeConfig = {
   unsubBody:
     "<p>你好！</p><p>你已成功退订 <b>{{site}}</b> 的邮件通知，之后不会再收到新文章邮件。</p>" +
     "<p>如果这不是你本人的操作，可回到站点重新订阅。</p>",
+  dailyLimit: 100,
 };
 
 const subscribeJson = (body: unknown, status = 200) =>
@@ -700,6 +703,22 @@ app.post("/api/subscribe", async (c) => {
             : "该邮箱已提交订阅，请到邮箱完成确认",
       });
     }
+    // 当日订阅上限（东八区）：达到后拒绝新订阅，防暴力刷订阅
+    const limit = cfg.dailyLimit > 0 ? cfg.dailyLimit : 0;
+    if (limit > 0) {
+      const todayRow = await db
+        .prepare(
+          `SELECT COUNT(*) AS c FROM "wl_Subscriber" WHERE date("createdAt",'+8 hours')=?1`
+        )
+        .bind(visitDay())
+        .first<{ c: number }>();
+      if ((todayRow?.c ?? 0) >= limit) {
+        return subscribeJson(
+          { ok: false, error: `今日订阅名额已满（上限 ${limit}），请明天再试` },
+          429
+        );
+      }
+    }
     const token = randomToken();
     const ip = c.req.header("cf-connecting-ip") || c.req.header("x-forwarded-for") || "";
     const ua = c.req.header("user-agent") || "";
@@ -866,6 +885,10 @@ app.put("/admin/api/subscribe/settings", async (c) => {
     const n = parseInt(String(v ?? ""), 10);
     return Number.isFinite(n) && n > 0 && n < 65536 ? n : fb;
   };
+  const asLimit = (v: unknown, fb: number) => {
+    const n = parseInt(String(v ?? ""), 10);
+    return Number.isFinite(n) && n > 0 && n <= 1000000 ? n : fb;
+  };
   try {
     const cur = await getSubscribeConfig(db);
     const next: SubscribeConfig = {
@@ -885,6 +908,7 @@ app.put("/admin/api/subscribe/settings", async (c) => {
       notifyBody: asStr(body.notifyBody, cur.notifyBody),
       unsubSubject: asStr(body.unsubSubject, cur.unsubSubject),
       unsubBody: asStr(body.unsubBody, cur.unsubBody),
+      dailyLimit: asLimit(body.dailyLimit, cur.dailyLimit),
     };
     await saveSubscribeConfig(db, next);
     return json({ ok: true, ...next, pass: "", hasPass: !!next.pass });
@@ -961,8 +985,10 @@ app.get("/admin/api/subscribe/list", async (c) => {
         `SELECT (SELECT COUNT(*) FROM "wl_Subscriber") AS total,
                 (SELECT COUNT(*) FROM "wl_Subscriber" WHERE "status"='confirmed') AS confirmed,
                 (SELECT COUNT(*) FROM "wl_Subscriber" WHERE "status"='pending') AS pending,
-                (SELECT COUNT(*) FROM "wl_Subscriber" WHERE "status"='unsubscribed') AS unsubscribed`
+                (SELECT COUNT(*) FROM "wl_Subscriber" WHERE "status"='unsubscribed') AS unsubscribed,
+                (SELECT COUNT(*) FROM "wl_Subscriber" WHERE date("createdAt",'+8 hours')=?1) AS today`
       )
+      .bind(visitDay())
       .first();
     return json({
       ok: true,
@@ -987,6 +1013,27 @@ app.delete("/admin/api/subscribe/subscriber", async (c) => {
       .bind(id)
       .run();
     return json({ ok: true });
+  } catch (e) {
+    return json({ ok: false, error: String(e) }, 500);
+  }
+});
+
+// 手动通过（管理员）：POST /admin/api/subscribe/approve  body {"id":1}
+// 将「待确认」订阅者直接置为「已确认」，无需对方点邮件确认
+app.post("/admin/api/subscribe/approve", async (c) => {
+  if (!isAdmin(c.get("userInfo"))) return json({ error: "unauthorized" }, 401);
+  const body = (await c.req.json().catch(() => ({}))) as { id?: unknown };
+  const id = parseInt(String(body?.id ?? ""), 10);
+  if (!Number.isFinite(id)) return json({ ok: false, error: "id 无效" }, 400);
+  try {
+    const r = await (c.env as Bindings).DB.prepare(
+      `UPDATE "wl_Subscriber" SET "status"='confirmed',"confirmedAt"=datetime('now'),"updatedAt"=datetime('now')
+       WHERE "id"=?1 AND "status"!='confirmed'`
+    )
+      .bind(id)
+      .run();
+    const changed = ((r.meta as { changes?: number } | undefined)?.changes ?? 0) > 0;
+    return json({ ok: true, changed });
   } catch (e) {
     return json({ ok: false, error: String(e) }, 500);
   }

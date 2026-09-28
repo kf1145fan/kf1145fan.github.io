@@ -10,7 +10,6 @@
 
 const VDIRTOR_CSS = "https://cdn.jsdelivr.net/npm/vditor@3.11.1/dist/index.css";
 const VDIRTOR_JS = "https://cdn.jsdelivr.net/npm/vditor@3.11.1/dist/index.min.js";
-const WALINE_LOGO = "https://waline.js.org/logo.png";
 
 const STYLE = `
 :root{color-scheme:light dark;--accent:#f97316;--accent-h:#ea580c;
@@ -26,7 +25,6 @@ a{color:var(--accent);text-decoration:none}
 .wk-nav{background:var(--nav);height:46px;display:flex;align-items:center;padding:0 20px;position:sticky;top:0;z-index:10}
 .wk-nav .inner{max-width:1080px;margin:0 auto;width:100%;display:flex;align-items:center;gap:14px}
 .wk-nav .brand{display:flex;align-items:center;gap:8px;color:var(--nav-active);font-size:14px;font-weight:600}
-.wk-nav .brand img{width:20px;height:20px;filter:brightness(0) invert(1)}
 .wk-nav .spacer{flex:1}
 .wk-nav .user{color:var(--nav-fg);font-size:12px}
 .wk-nav .logout{color:var(--nav-fg);font-size:12px;cursor:pointer;border:1px solid var(--border);padding:3px 10px;border-radius:3px;background:transparent}
@@ -413,6 +411,8 @@ async function loadSubscribeSettings(){
       const p = $('#smPass');
       if(p){ p.value=''; p.placeholder = d.hasPass ? '已保存（留空表示不修改）' : '未设置'; }
       const ck = $('#smNeedConfirm'); if(ck) ck.checked = !!d.needConfirm;
+      subSet('smDailyLimit', d.dailyLimit);
+      subSet('subDailyLimit', d.dailyLimit);
     }
   }catch(e){}
 }
@@ -429,7 +429,8 @@ async function saveSubscribeSettings(){
     siteName: v('smSiteName'), siteUrl: v('smSiteUrl').trim(),
     subject: v('smSubject'), body: v('smBody'), needConfirm: !!(ck && ck.checked),
     notifySubject: v('smNotifySubject'), notifyBody: v('smNotifyBody'),
-    unsubSubject: v('smUnsubSubject'), unsubBody: v('smUnsubBody')
+    unsubSubject: v('smUnsubSubject'), unsubBody: v('smUnsubBody'),
+    dailyLimit: v('smDailyLimit')
   };
   const r = await api('/admin/api/subscribe/settings', { method:'PUT', body: JSON.stringify(payload) });
   const msg = $('#subMsg');
@@ -465,6 +466,7 @@ async function loadSubscribers(){
     const set = (id, n) => { const el=$('#'+id); if(el) el.textContent = (n==null?'-':n); };
     set('subTotal', s.total); set('subConfirmed', s.confirmed);
     set('subPending', s.pending); set('subUnsub', s.unsubscribed);
+    set('subToday', s.today);
     const list = d.list || [];
     if(!box) return;
     if(!list.length){ box.innerHTML = '<div class="empty">暂无订阅者</div>'; return; }
@@ -472,10 +474,13 @@ async function loadSubscribers(){
     const label = { confirmed:'已确认', pending:'待确认', unsubscribed:'已退订' };
     let h = '<table class="wk-table"><thead><tr><th>邮箱</th><th>状态</th><th>订阅时间</th><th></th></tr></thead><tbody>';
     list.forEach(x => {
+      const passBtn = x.status === 'pending'
+        ? '<button class="wk-btn sm" onclick="approveSubscriber(' + x.id + ')">通过</button> '
+        : '';
       h += '<tr><td>' + esc(x.email) + '</td>'
         + '<td><span class="wk-tag ' + (cls[x.status]||'') + '">' + esc(label[x.status]||x.status) + '</span></td>'
         + '<td>' + esc((x.createdAt||'').slice(0,10)) + '</td>'
-        + '<td style="text-align:right"><button class="wk-btn ghost sm" onclick="delSubscriber(' + x.id + ')">删除</button></td></tr>';
+        + '<td style="text-align:right">' + passBtn + '<button class="wk-btn ghost sm" onclick="delSubscriber(' + x.id + ')">删除</button></td></tr>';
     });
     h += '</tbody></table>';
     box.innerHTML = h;
@@ -485,6 +490,26 @@ async function delSubscriber(id){
   if(!confirm('确认删除该订阅者？')) return;
   const r = await api('/admin/api/subscribe/subscriber?id=' + id, { method:'DELETE' });
   if(r.ok){ toast('已删除'); loadSubscribers(); } else toast('删除失败', true);
+}
+async function approveSubscriber(id){
+  if(!confirm('确认通过该订阅者？通过后立即变为「已确认」，无需对方点邮件确认。')) return;
+  const r = await api('/admin/api/subscribe/approve', { method:'POST', body: JSON.stringify({ id: id }) });
+  if(r.ok){ toast('已通过'); loadSubscribers(); } else toast('操作失败：' + ((r.data && r.data.error) || '未知错误'), true);
+}
+async function saveSubLimit(){
+  const el = $('#subDailyLimit');
+  const v = el ? el.value : '';
+  const r = await api('/admin/api/subscribe/settings', { method:'PUT', body: JSON.stringify({ dailyLimit: v }) });
+  const msg = $('#subLimitMsg');
+  if(r.ok){
+    toast('已保存当日订阅上限');
+    if(msg){ msg.className='msg ok'; msg.textContent='已保存'; }
+    loadSubscribeSettings();
+  } else {
+    const err = (r.data && r.data.error) || '保存失败';
+    toast(err, true);
+    if(msg){ msg.className='msg err'; msg.textContent=err; }
+  }
 }
 async function broadcastSubscribe(){
   const v = id => { const el=$('#'+id); return el ? el.value : ''; };
@@ -1249,7 +1274,6 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
 <nav class="wk-nav">
   <div class="inner">
     <div class="brand">
-      <img src="${WALINE_LOGO}" alt="">
       <span>博客后台</span>
     </div>
     <div class="spacer"></div>
@@ -1441,6 +1465,18 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
     </div>
 
     <div class="wk-card">
+      <h3 class="wk-title">订阅限制（防刷）</h3>
+      <p class="wk-label" style="margin-top:0">按东八区计日，当天新订阅达到上限后，其他人将无法再提交订阅。</p>
+      <div class="filters" style="margin:0 0 10px;align-items:center">
+        <span class="wk-label" style="margin:0">当日最多订阅量</span>
+        <input class="wk-input" id="subDailyLimit" type="number" min="1" max="1000000" style="width:130px" placeholder="100">
+        <span class="wk-label" style="margin:0">今日已订阅 <b id="subToday">-</b> 人</span>
+        <button class="wk-btn sm" onclick="saveSubLimit()">保存</button>
+      </div>
+      <div class="msg" id="subLimitMsg"></div>
+    </div>
+
+    <div class="wk-card">
       <h3 class="wk-title">群发邮件</h3>
       <label class="wk-label">主题</label>
       <input class="wk-input" id="bcSubject">
@@ -1555,6 +1591,11 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
         <label class="wk-label" style="display:flex;align-items:center;gap:6px;margin-top:10px;cursor:pointer">
           <input type="checkbox" id="smNeedConfirm" style="width:auto"> 需要邮件确认（关闭后提交即订阅成功）
         </label>
+        <div class="filters" style="margin:12px 0 0;align-items:center">
+          <span class="wk-label" style="margin:0">当日最多订阅量</span>
+          <input class="wk-input" id="smDailyLimit" type="number" min="1" max="1000000" style="width:130px" placeholder="100">
+          <span class="wk-label" style="margin:0">（按东八区计日，达到后当天不再接受新订阅，防刷）</span>
+        </div>
         <div class="filters" style="margin:14px 0 0">
           <button class="wk-btn sm" onclick="saveSubscribeSettings()">保存配置</button>
         </div>
@@ -1637,13 +1678,19 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
           <li>
             <div>
               <div class="name"><span class="chip">PUT</span> /admin/api/subscribe/settings</div>
-              <div class="meta">保存配置（需管理员登录）。pass 留空表示不修改</div>
+              <div class="meta">保存配置（需管理员登录）。pass 留空表示不修改；dailyLimit 为当日最多订阅量（按东八区计日，默认 100）</div>
             </div>
           </li>
           <li>
             <div>
               <div class="name"><span class="chip">GET</span> /admin/api/subscribe/list?status=&q=</div>
-              <div class="meta">订阅者列表（需管理员登录）。返回 {ok, total, stats, list:[{id,email,status,createdAt}]}</div>
+              <div class="meta">订阅者列表（需管理员登录）。返回 {ok, total, stats, list:[{id,email,status,createdAt}]}，stats.today 为今日新订阅数</div>
+            </div>
+          </li>
+          <li>
+            <div>
+              <div class="name"><span class="chip">POST</span> /admin/api/subscribe/approve</div>
+              <div class="meta">手动通过订阅者（需管理员登录）。body {"id":1}，将「待确认」直接置为「已确认」</div>
             </div>
           </li>
           <li>
