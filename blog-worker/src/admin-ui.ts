@@ -239,7 +239,7 @@ function go(name){
     if(name==='visit') loadVisit();
     if(name==='subscribe') loadSubscribe();
     if(name==='ai'){ /* AI 助手：占位页，暂未开放 */ }
-    if(name==='settings'){ loadSubscribeSettings(); loadSiteSettings(); }
+    if(name==='settings'){ loadSubscribeSettings(); loadSiteSettings(); loadAiSettings(); }
     window.scrollTo(0,0);
   }
   try{ history.replaceState(null,'','/admin/'+name); }catch(e){}
@@ -392,6 +392,104 @@ async function saveSiteSettings(){
     toast(err, true);
     if(msg){ msg.className='msg err'; msg.textContent=err; }
   }
+}
+
+// ---------- AI 设置（OpenAI 兼容接口：配置 / 测试 / 模型列表）----------
+let aiModels = [];
+async function loadAiSettings(){
+  try{
+    const r = await api('/admin/api/ai/settings');
+    if(r.ok && r.data){
+      const d = r.data;
+      const bu = $('#aiBaseUrl'); if(bu) bu.value = d.baseUrl || '';
+      const md = $('#aiModel'); if(md) md.value = d.model || '';
+      const en = $('#aiEnabled'); if(en) en.checked = !!d.enabled;
+      const k = $('#aiApiKey');
+      if(k){ k.value = ''; k.placeholder = d.hasKey ? '已保存（留空表示不修改）' : '未设置'; }
+    }
+  }catch(e){}
+}
+async function saveAiSettings(){
+  const v = id => { const el=$('#'+id); return el ? el.value : ''; };
+  const ck = $('#aiEnabled');
+  const payload = {
+    baseUrl: v('aiBaseUrl').trim(),
+    apiKey: v('aiApiKey'),
+    model: v('aiModel').trim(),
+    enabled: !!(ck && ck.checked)
+  };
+  const r = await api('/admin/api/ai/settings', { method:'PUT', body: JSON.stringify(payload) });
+  const msg = $('#aiMsg');
+  if(r.ok){
+    toast('AI 配置已保存');
+    if(msg){ msg.className='msg ok'; msg.textContent='AI 配置已保存'; }
+    const k = $('#aiApiKey'); if(k) k.value='';
+    loadAiSettings();
+  } else {
+    const err = (r.data && r.data.error) || '保存失败';
+    toast(err, true);
+    if(msg){ msg.className='msg err'; msg.textContent=err; }
+  }
+}
+async function testAiSettings(){
+  const v = id => { const el=$('#'+id); return el ? el.value : ''; };
+  const msg = $('#aiMsg');
+  if(msg){ msg.className='msg'; msg.textContent='测试中...'; }
+  toast('测试中...');
+  const payload = { baseUrl: v('aiBaseUrl').trim(), apiKey: v('aiApiKey'), model: v('aiModel').trim() };
+  try{
+    const r = await api('/admin/api/ai/test', { method:'POST', body: JSON.stringify(payload) });
+    const d = (r.data || {});
+    if(r.ok && d.ok){
+      const text = '连接成功，耗时 ' + (d.elapsed == null ? '-' : d.elapsed) + 'ms；模型「' + (d.model || '') + '」回复：' + (d.reply || '（空）');
+      toast('连接成功（' + (d.elapsed == null ? '-' : d.elapsed) + 'ms）');
+      if(msg){ msg.className='msg ok'; msg.textContent=text; }
+    } else {
+      const err = d.error || '测试失败';
+      toast('测试失败：' + err, true);
+      if(msg){ msg.className='msg err'; msg.textContent='测试失败：' + err; }
+    }
+  }catch(e){
+    toast('测试失败', true);
+    if(msg){ msg.className='msg err'; msg.textContent='测试失败：' + e; }
+  }
+}
+async function loadAiModels(){
+  const box = $('#aiModelList');
+  const msg = $('#aiMsg');
+  if(box) box.innerHTML = '<span class="wk-label" style="margin:0">加载中...</span>';
+  try{
+    const r = await api('/admin/api/ai/models');
+    const d = (r.data || {});
+    if(r.ok && d.ok){
+      aiModels = Array.isArray(d.models) ? d.models : [];
+      renderAiModels();
+      if(msg){ msg.className='msg ok'; msg.textContent='共获取到 ' + aiModels.length + ' 个模型，点击模型名可填入默认模型'; }
+    } else {
+      aiModels = [];
+      if(box) box.innerHTML = '';
+      const err = d.error || '获取失败';
+      if(msg){ msg.className='msg err'; msg.textContent='获取失败：' + err; }
+      toast('获取模型失败：' + err, true);
+    }
+  }catch(e){
+    aiModels = [];
+    if(box) box.innerHTML = '';
+    if(msg){ msg.className='msg err'; msg.textContent='获取失败：' + e; }
+    toast('获取模型失败', true);
+  }
+}
+function renderAiModels(){
+  const box = $('#aiModelList');
+  if(!box) return;
+  if(!aiModels.length){ box.innerHTML = '<span class="wk-label" style="margin:0">未获取到模型</span>'; return; }
+  box.innerHTML = aiModels.map((m,i) => '<button type="button" class="wk-btn ghost sm" style="margin:0 6px 6px 0" onclick="pickAiModel(' + i + ')">' + esc(m) + '</button>').join('');
+}
+function pickAiModel(i){
+  const m = aiModels[i];
+  if(m == null) return;
+  const el = $('#aiModel'); if(el) el.value = m;
+  toast('已填入模型：' + m);
 }
 
 // ---------- 订阅管理（SMTP 配置 + 订阅者 + 群发）----------
@@ -1604,6 +1702,29 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
     </details>
 
     <details class="wk-collapse">
+      <summary>AI 设置</summary>
+      <div class="wk-collapse-body">
+        <p class="wk-label" style="margin-top:0">配置一个 OpenAI 兼容的 AI 接口（Chat Completions 协议）。填入基础地址与密钥后，可测试连通性并一键获取该接口下的全部可用模型。</p>
+        <label class="wk-label">API 地址（基础地址，带或不带结尾的 /v1 均可）</label>
+        <input class="wk-input" id="aiBaseUrl" placeholder="https://api.openai.com/v1">
+        <label class="wk-label" style="margin-top:12px">API 密钥</label>
+        <input class="wk-input" id="aiApiKey" type="password" placeholder="留空表示不修改">
+        <label class="wk-label" style="margin-top:12px">默认模型</label>
+        <input class="wk-input" id="aiModel" placeholder="gpt-3.5-turbo">
+        <label class="wk-label" style="display:flex;align-items:center;gap:6px;margin-top:10px;cursor:pointer">
+          <input type="checkbox" id="aiEnabled" style="width:auto"> 启用 AI 设置
+        </label>
+        <div class="filters" style="margin:14px 0 0">
+          <button class="wk-btn sm" onclick="saveAiSettings()">保存配置</button>
+          <button class="wk-btn ghost sm" onclick="testAiSettings()">测试连通性</button>
+          <button class="wk-btn ghost sm" onclick="loadAiModels()">获取模型列表</button>
+        </div>
+        <div class="msg" id="aiMsg"></div>
+        <div id="aiModelList" style="margin-top:10px"></div>
+      </div>
+    </details>
+
+    <details class="wk-collapse">
       <summary>API 说明（访问量）</summary>
       <div class="wk-collapse-body">
         <ul class="wk-list">
@@ -1709,6 +1830,39 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
             <div>
               <div class="name"><span class="chip">POST</span> /admin/api/subscribe/send</div>
               <div class="meta">群发邮件（需管理员登录）。body {"subject":"","body":"&lt;html&gt;"}</div>
+            </div>
+          </li>
+        </ul>
+      </div>
+    </details>
+
+    <details class="wk-collapse">
+      <summary>API 说明（AI）</summary>
+      <div class="wk-collapse-body">
+        <p class="wk-label" style="margin-top:0">以下接口均需管理员登录。遵循 OpenAI 兼容约定，地址会自动拼接 {baseUrl}/v1/...（已带 /v1 则不重复）。</p>
+        <ul class="wk-list">
+          <li>
+            <div>
+              <div class="name"><span class="chip">GET</span> /admin/api/ai/settings</div>
+              <div class="meta">读取 AI 配置。返回 {ok, baseUrl, model, enabled, hasKey}，密钥不回传</div>
+            </div>
+          </li>
+          <li>
+            <div>
+              <div class="name"><span class="chip">PUT</span> /admin/api/ai/settings</div>
+              <div class="meta">保存 AI 配置。body {"baseUrl":"","apiKey":"","model":"","enabled":true}，apiKey 留空表示不修改</div>
+            </div>
+          </li>
+          <li>
+            <div>
+              <div class="name"><span class="chip">POST</span> /admin/api/ai/test</div>
+              <div class="meta">测试连通性。向 {baseUrl}/chat/completions 发最小请求；body 可传 {"baseUrl","apiKey","model"} 覆盖。返回 {ok, elapsed, model, reply} 或 {ok:false, error}</div>
+            </div>
+          </li>
+          <li>
+            <div>
+              <div class="name"><span class="chip">GET</span> /admin/api/ai/models</div>
+              <div class="meta">获取全部可用模型。调用 {baseUrl}/models，返回 {ok, count, models:[id...]}</div>
             </div>
           </li>
         </ul>

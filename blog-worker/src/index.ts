@@ -437,6 +437,166 @@ app.put("/admin/api/site/settings", async (c) => {
   }
 });
 
+// ---------- 3.58 AI 设置（OpenAI 兼容接口）----------
+// 配置统一存于 wl_Settings(key=ai_config)，序列化为 JSON，模仿订阅配置的写法。
+// 注意：评论区垃圾过滤另行使用 llm_endpoint/llm_api_key/llm_model/llm_prompt，
+// 与本模块的 ai_config 相互独立。
+interface AiConfig {
+  baseUrl: string; // API 基础地址，如 https://api.openai.com/v1
+  apiKey: string; // API 密钥（读取接口不回传明文）
+  model: string; // 默认模型
+  enabled: boolean; // 是否启用
+}
+
+const AI_DEFAULT_CONFIG: AiConfig = {
+  baseUrl: "",
+  apiKey: "",
+  model: "",
+  enabled: false,
+};
+
+const AI_CONFIG_KEY = "ai_config";
+
+async function getAiConfig(db: D1Database): Promise<AiConfig> {
+  const raw = await getSiteSetting(db, AI_CONFIG_KEY, "");
+  if (!raw) return { ...AI_DEFAULT_CONFIG };
+  try {
+    return { ...AI_DEFAULT_CONFIG, ...JSON.parse(raw) };
+  } catch (e) {
+    return { ...AI_DEFAULT_CONFIG };
+  }
+}
+
+async function saveAiConfig(db: D1Database, cfg: AiConfig): Promise<void> {
+  await setSiteSetting(db, AI_CONFIG_KEY, JSON.stringify(cfg));
+}
+
+// 拼接 OpenAI 兼容接口地址：用户可能填或不填结尾的 /v1，做健壮处理
+function aiEndpoint(baseUrl: string, path: string): string {
+  let base = String(baseUrl || "").trim().replace(/\/+$/, "");
+  if (!base) return "";
+  // 结尾缺少版本段（如 /v1）时自动补全，兼容标准 OpenAI 与第三方兼容接口
+  if (!/\/v\d+[a-zA-Z]*$/.test(base)) base += "/v1";
+  return base + path;
+}
+
+// GET 读取 AI 配置（管理员，密钥不回传，以 hasKey 表示是否已设置）
+app.get("/admin/api/ai/settings", async (c) => {
+  if (!isAdmin(c.get("userInfo"))) return json({ error: "unauthorized" }, 401);
+  try {
+    const cfg = await getAiConfig((c.env as Bindings).DB);
+    return json({ ok: true, ...cfg, apiKey: "", hasKey: !!cfg.apiKey });
+  } catch (e) {
+    return json({ ok: false, error: String(e) }, 500);
+  }
+});
+
+// PUT 保存 AI 配置（管理员，apiKey 留空表示不修改）
+app.put("/admin/api/ai/settings", async (c) => {
+  if (!isAdmin(c.get("userInfo"))) return json({ error: "unauthorized" }, 401);
+  const db = (c.env as Bindings).DB;
+  const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+  try {
+    const cur = await getAiConfig(db);
+    const next: AiConfig = {
+      baseUrl: body.baseUrl === undefined ? cur.baseUrl : String(body.baseUrl).trim(),
+      apiKey:
+        body.apiKey === undefined || body.apiKey === "" ? cur.apiKey : String(body.apiKey),
+      model: body.model === undefined ? cur.model : String(body.model).trim(),
+      enabled: body.enabled === undefined ? cur.enabled : !!body.enabled,
+    };
+    await saveAiConfig(db, next);
+    return json({ ok: true, ...next, apiKey: "", hasKey: !!next.apiKey });
+  } catch (e) {
+    return json({ ok: false, error: String(e) }, 500);
+  }
+});
+
+// POST 测试连通性（管理员）：向 {baseUrl}/chat/completions 发一个最小请求
+// body 可选 {baseUrl, apiKey, model}，未传则使用已保存配置，方便未保存时先测试
+app.post("/admin/api/ai/test", async (c) => {
+  if (!isAdmin(c.get("userInfo"))) return json({ error: "unauthorized" }, 401);
+  const db = (c.env as Bindings).DB;
+  const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+  try {
+    const cfg = await getAiConfig(db);
+    const baseUrl = (body.baseUrl ? String(body.baseUrl) : cfg.baseUrl).trim();
+    const apiKey = body.apiKey ? String(body.apiKey) : cfg.apiKey;
+    const model = (body.model ? String(body.model) : cfg.model).trim();
+    if (!baseUrl) return json({ ok: false, error: "请先填写 API 地址" }, 400);
+    if (!model)
+      return json({ ok: false, error: "请先填写默认模型（可点击「获取模型列表」选择）" }, 400);
+    const url = aiEndpoint(baseUrl, "/chat/completions");
+    const started = Date.now();
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+      },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: "user", content: "你好，这是一条连通性测试消息，请回复一句话确认。" }],
+        max_tokens: 32,
+      }),
+    });
+    const elapsed = Date.now() - started;
+    const text = await resp.text();
+    let data: any = null;
+    try {
+      data = JSON.parse(text);
+    } catch (e) {}
+    if (!resp.ok) {
+      const detail =
+        data?.error?.message || data?.message || text.slice(0, 300) || `HTTP ${resp.status}`;
+      return json({ ok: false, elapsed, status: resp.status, error: String(detail) });
+    }
+    const reply = data?.choices?.[0]?.message?.content || data?.choices?.[0]?.text || "";
+    return json({
+      ok: true,
+      elapsed,
+      status: resp.status,
+      model: data?.model || model,
+      reply: String(reply).trim().slice(0, 300),
+    });
+  } catch (e) {
+    return json({ ok: false, error: String(e) }, 500);
+  }
+});
+
+// GET 获取模型列表（管理员）：调用 {baseUrl}/models（OpenAI 兼容格式）
+app.get("/admin/api/ai/models", async (c) => {
+  if (!isAdmin(c.get("userInfo"))) return json({ error: "unauthorized" }, 401);
+  try {
+    const cfg = await getAiConfig((c.env as Bindings).DB);
+    if (!cfg.baseUrl) return json({ ok: false, error: "请先填写并保存 API 地址" }, 400);
+    const url = aiEndpoint(cfg.baseUrl, "/models");
+    const resp = await fetch(url, {
+      headers: {
+        Accept: "application/json",
+        ...(cfg.apiKey ? { Authorization: `Bearer ${cfg.apiKey}` } : {}),
+      },
+    });
+    const text = await resp.text();
+    let data: any = null;
+    try {
+      data = JSON.parse(text);
+    } catch (e) {}
+    if (!resp.ok) {
+      const detail =
+        data?.error?.message || data?.message || text.slice(0, 300) || `HTTP ${resp.status}`;
+      return json({ ok: false, status: resp.status, error: String(detail) });
+    }
+    const list: any[] = Array.isArray(data?.data) ? data.data : Array.isArray(data) ? data : [];
+    const models = list
+      .map((m) => (typeof m === "string" ? m : m?.id))
+      .filter((m): m is string => typeof m === "string" && !!m);
+    return json({ ok: true, count: models.length, models });
+  } catch (e) {
+    return json({ ok: false, error: String(e) }, 500);
+  }
+});
+
 // ---------- 3.6 邮件订阅 API ----------
 // SMTP 配置存于 wl_Settings(key=subscribe_config)，订阅者存于 wl_Subscriber。
 // 公开接口（/api/subscribe*）允许跨域，方便在任意站点调用；管理接口走 /admin/api/*。
