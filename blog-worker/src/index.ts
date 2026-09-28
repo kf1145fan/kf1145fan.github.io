@@ -298,6 +298,32 @@ app.delete("/admin/api/post", async (c) => {
   return handleDeletePost(c.env as Bindings, path);
 });
 
+// 批量删除文章：POST /admin/api/posts/delete  body { paths: string[] }
+app.post("/admin/api/posts/delete", async (c) => {
+  if (!isAdmin(c.get("userInfo"))) return json({ error: "unauthorized" }, 401);
+  const body = (await c.req.json().catch(() => ({}))) as { paths?: unknown };
+  const paths = Array.isArray(body.paths)
+    ? body.paths.map((x) => String(x)).filter(Boolean)
+    : [];
+  if (!paths.length) return json({ ok: false, error: "paths required" }, 400);
+  const env = c.env as Bindings;
+  const results: Array<{ path: string; ok: boolean; error?: string }> = [];
+  for (const p of paths) {
+    const r = await handleDeletePost(env, p);
+    const d = (await r.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+    results.push({ path: p, ok: r.ok && !!d.ok, error: d?.error });
+  }
+  const deleted = results.filter((r) => r.ok).length;
+  return json({ ok: deleted > 0, deleted, total: paths.length, results });
+});
+
+// 批量上传文章：POST /admin/api/posts/upload  body { files: [{name, content}] }
+app.post("/admin/api/posts/upload", async (c) => {
+  if (!isAdmin(c.get("userInfo"))) return json({ error: "unauthorized" }, 401);
+  const body = (await c.req.json().catch(() => ({}))) as { files?: unknown };
+  return handleUploadPosts(c.env as Bindings, body.files);
+});
+
 // 部署工作流状态：/admin/api/build
 app.get("/admin/api/build", async (c) => {
   if (!isAdmin(c.get("userInfo"))) return json({ error: "unauthorized" }, 401);
@@ -668,6 +694,21 @@ app.post("/api/subscribe", async (c) => {
     const cfg = await getSubscribeConfig(db);
     if (!cfg.host || !cfg.port) {
       return subscribeJson({ ok: false, error: "订阅功能尚未配置" }, 503);
+    }
+    // 已订阅（待确认/已确认）的邮箱不再重复发送确认邮件；已退订的可重新订阅
+    const existing = await db
+      .prepare(`SELECT "status" FROM "wl_Subscriber" WHERE "email"=?1`)
+      .bind(email)
+      .first<{ status: string }>();
+    if (existing && existing.status !== "unsubscribed") {
+      return subscribeJson({
+        ok: true,
+        needConfirm: existing.status === "pending",
+        message:
+          existing.status === "confirmed"
+            ? "该邮箱已订阅，无需重复订阅"
+            : "该邮箱已提交订阅，请到邮箱完成确认",
+      });
     }
     const token = randomToken();
     const ip = c.req.header("cf-connecting-ip") || c.req.header("x-forwarded-for") || "";
@@ -1320,6 +1361,71 @@ async function handleDeletePost(env: Bindings, path: string): Promise<Response> 
   } catch (e) {
     return json({ ok: false, error: String(e) }, 500);
   }
+}
+
+// 批量上传 Markdown 文章：自动补 front matter，重名自动加序号
+async function handleUploadPosts(env: Bindings, files: unknown): Promise<Response> {
+  const { token, repo, branch, postsDir, headers } = ghConfig(env);
+  if (!token) return json({ ok: false, error: "GH_TOKEN not configured" }, 500);
+  const list = Array.isArray(files) ? (files as any[]) : [];
+  if (!list.length) return json({ ok: false, error: "files required" }, 400);
+
+  const results: Array<{ name: string; path?: string; ok: boolean; error?: string }> = [];
+  for (const item of list) {
+    const rawName = String(item?.name || "").trim();
+    const content = String(item?.content ?? "");
+    try {
+      if (!rawName) throw new Error("文件名为空");
+      if (!content.trim()) throw new Error("文件内容为空");
+      let base = (rawName.split(/[\\/]/).pop() || "").replace(/[^\w\u4e00-\u9fa5.\- ]/g, "").trim();
+      if (!base) throw new Error("文件名无效");
+      if (!/\.(md|markdown)$/i.test(base)) base = base.replace(/\.(txt|text)$/i, "") + ".md";
+
+      // 同名文件自动加序号，避免覆盖
+      let filename = base;
+      for (let n = 1; n <= 100; n++) {
+        const exists = await fetch(
+          `https://api.github.com/repos/${repo}/contents/${encodeURIComponent(`${postsDir}/${filename}`)}`,
+          { headers },
+        );
+        if (!exists.ok) break;
+        filename = base.replace(/\.md$/i, "") + "-" + n + ".md";
+      }
+      const path = `${postsDir}/${filename}`;
+
+      let body = content;
+      if (!/^---\r?\n/.test(content)) {
+        const title = filename.replace(/\.md$/i, "");
+        const date = new Date().toISOString().slice(0, 10);
+        body = `---\ntitle: '${title.replace(/'/g, "\\'")}'\ndate: ${date} 00:00:00\n---\n\n${content}\n`;
+      } else if (!body.endsWith("\n")) {
+        body += "\n";
+      }
+
+      const put = await fetch(
+        `https://api.github.com/repos/${repo}/contents/${encodeURIComponent(path)}`,
+        {
+          method: "PUT",
+          headers,
+          body: JSON.stringify({
+            message: `docs: add post ${filename}`,
+            content: btoa(unescape(encodeURIComponent(body))),
+            branch,
+          }),
+        },
+      );
+      if (!put.ok) throw new Error("github error " + put.status);
+      results.push({ name: rawName, path, ok: true });
+    } catch (e) {
+      results.push({
+        name: rawName || "(未命名)",
+        ok: false,
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }
+  const created = results.filter((r) => r.ok).length;
+  return json({ ok: created > 0, created, total: results.length, results });
 }
 
 // ---------- front matter 解析（逐行，稳健）----------

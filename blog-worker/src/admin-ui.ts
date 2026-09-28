@@ -519,9 +519,10 @@ async function loadPosts(){
   list.innerHTML = '<li class="empty">加载中...</li>';
   const r = await api(API_BASE+'/posts');
   if(r.status===401){ redirectLogin(); return; }
-  if(!r.ok){ list.innerHTML = '<li class="empty">加载失败：'+(r.data&&r.data.error||r.status)+'</li>'; return; }
+  if(!r.ok){ list.innerHTML = '<li class="empty">加载失败：'+(r.data&&r.data.error||r.status)+'</li>'; hideBatchBar(); return; }
   const posts = (r.data.posts||[]).slice().sort((a,b)=> (b.date||'').localeCompare(a.date||'') || String(b.name||'').localeCompare(String(a.name||'')));
-  if(!posts.length){ list.innerHTML='<li class="empty">还没有文章，点右上角「＋ 添加新文章」开始写作</li>'; return; }
+  selectedPosts.clear();
+  if(!posts.length){ list.innerHTML='<li class="empty">还没有文章，点右上角「＋ 添加新文章」开始写作</li>'; hideBatchBar(); return; }
   wireTaxonomySuggest(r.data);
   list.innerHTML='';
   posts.forEach(p=>{
@@ -530,13 +531,60 @@ async function loadPosts(){
     const cat=(p.categories||[]).map(esc).join(' / ');
     const tag=(p.tags||[]).map(esc).join(' · ');
     const taxo='<div class="meta">'+esc(p.path)+'</div>'+(cat?'<span class="chip">'+cat+'</span>':'')+(tag?'<span class="chip chipTag">'+tag+'</span>':'');
-    li.innerHTML = '<div><div class="name">'+esc(name)+'</div>'+taxo+'</div>'+
+    li.innerHTML = '<div style="display:flex;align-items:center;gap:10px;min-width:0">'+
+        '<input type="checkbox" class="postCheck" data-path="'+esc(p.path)+'" style="width:auto;flex-shrink:0">'+
+        '<div><div class="name">'+esc(name)+'</div>'+taxo+'</div>'+
+      '</div>'+
       '<div class="ops">'+
       '<button class="wk-btn ghost sm" data-a="edit" data-path="'+esc(p.path)+'">编辑</button>'+
       '<button class="wk-btn danger sm" data-a="del" data-path="'+esc(p.path)+'" data-name="'+esc(name)+'">删除</button>'+
       '</div>';
     list.appendChild(li);
   });
+  showBatchBar();
+}
+// ---------- 管理文章：多选 / 批量操作 ----------
+let selectedPosts = new Set();
+function showBatchBar(){ const b=$('#batchBar'); if(b) b.classList.remove('hidden'); updateBatchBar(); }
+function hideBatchBar(){ const b=$('#batchBar'); if(b) b.classList.add('hidden'); }
+function updateBatchBar(){
+  const n=selectedPosts.size;
+  const cnt=$('#pickCount'); if(cnt) cnt.textContent=n;
+  const del=$('#batchDelBtn'); if(del) del.disabled = n===0;
+  const all=$('#pickAll');
+  if(all){ const boxes=$$('#postList .postCheck'); all.checked = boxes.length>0 && n===boxes.length; }
+}
+async function deleteSelectedPosts(){
+  const paths=Array.from(selectedPosts);
+  if(!paths.length) return;
+  if(!confirm('确认删除所选 '+paths.length+' 篇文章？')) return;
+  const r=await api(API_BASE+'/posts/delete',{method:'POST',body:JSON.stringify({paths:paths})});
+  if(r.status===401){ redirectLogin(); return; }
+  if(r.ok&&r.data&&r.data.ok){
+    toast('已删除 '+(r.data.deleted||0)+'/'+(r.data.total||paths.length)+' 篇');
+    await loadPosts();
+    await launchDeploy('已删除所选文章，工作流正在重建站点…');
+  } else toast('批量删除失败：'+(r.data&&r.data.error||r.status),true);
+}
+async function batchUploadPosts(files){
+  if(!files||!files.length) return;
+  toast('读取文件中…');
+  const out=[];
+  for(let i=0;i<files.length;i++){
+    try{ out.push({name:files[i].name, content:await files[i].text()}); }
+    catch(e){ toast('读取「'+files[i].name+'」失败',true); return; }
+  }
+  toast('上传中…');
+  const r=await api(API_BASE+'/posts/upload',{method:'POST',body:JSON.stringify({files:out})});
+  if(r.status===401){ redirectLogin(); return; }
+  if(r.ok&&r.data&&r.data.created>0){
+    toast('已上传 '+(r.data.created||0)+'/'+(r.data.total||out.length)+' 篇');
+    await loadPosts();
+    await launchDeploy('已上传文章，工作流正在重建站点…');
+  } else {
+    const firstErr=(r.data&&r.data.results&&r.data.results[0]&&r.data.results[0].error)||(r.data&&r.data.error)||r.status;
+    toast('上传失败：'+firstErr,true);
+  }
 }
 function onListClick(e){
   const btn=e.target.closest('button'); if(!btn) return;
@@ -1052,6 +1100,26 @@ document.addEventListener('DOMContentLoaded', ()=>{
   });
   window.addEventListener('beforeunload', saveDraft);
   $('#postList').addEventListener('click',onListClick);
+  // 管理文章：多选 / 批量删除 / 批量上传
+  $('#postList').addEventListener('change',e=>{
+    const c=e.target;
+    if(!c||!c.classList||!c.classList.contains('postCheck')) return;
+    const p=c.dataset.path;
+    if(c.checked) selectedPosts.add(p); else selectedPosts.delete(p);
+    updateBatchBar();
+  });
+  $('#pickAll').onchange=e=>{
+    const on=e.target.checked;
+    $$('#postList .postCheck').forEach(c=>{
+      c.checked=on;
+      const p=c.dataset.path;
+      if(on) selectedPosts.add(p); else selectedPosts.delete(p);
+    });
+    updateBatchBar();
+  };
+  $('#batchDelBtn').onclick=deleteSelectedPosts;
+  $('#batchUpBtn').onclick=()=>$('#batchUpInput').click();
+  $('#batchUpInput').onchange=e=>{ batchUploadPosts(Array.from(e.target.files||[])); e.target.value=''; };
   $('#commentList').addEventListener('click',onCommentAction);
   $$('#commentFilter .wk-btn').forEach(b=>b.onclick=()=>setCommentFilter(b.dataset.f));
   $('#fileList').addEventListener('click',onFileClick);
@@ -1117,9 +1185,20 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
     <div class="wk-card">
       <div class="toolbar" style="justify-content:space-between;align-items:center">
         <h3 class="wk-title" style="margin:0;border:none;padding:0">已有文章</h3>
-        <button class="wk-btn sm" id="newBtn">＋ 添加新文章</button>
+        <div style="display:flex;gap:6px">
+          <button class="wk-btn ghost sm" id="batchUpBtn">批量上传</button>
+          <button class="wk-btn sm" id="newBtn">＋ 添加新文章</button>
+        </div>
+      </div>
+      <div class="filters hidden" id="batchBar" style="margin:10px 0 0">
+        <label class="wk-label" style="display:flex;align-items:center;gap:6px;margin:0;cursor:pointer">
+          <input type="checkbox" id="pickAll" style="width:auto"> 全选
+        </label>
+        <span class="wk-label" style="margin:0">已选 <b id="pickCount">0</b> 篇</span>
+        <button class="wk-btn danger sm" id="batchDelBtn" disabled>删除所选</button>
       </div>
       <ul class="wk-list" id="postList"><li class="empty">加载中...</li></ul>
+      <input type="file" id="batchUpInput" accept=".md,.markdown,.txt" multiple class="hidden">
     </div>
   </div>
 
