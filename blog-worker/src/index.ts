@@ -620,9 +620,19 @@ async function broadcastToConfirmed(
   return { sent, failed, total: list.length };
 }
 
-function subscribeResultPage(title: string, message: string, siteUrl?: string): string {
+function subscribeResultPage(
+  title: string,
+  message: string,
+  siteUrl?: string,
+  unsubUrl?: string
+): string {
   const back = siteUrl
     ? '<p style="margin-top:16px"><a href="' + siteUrl + '" style="color:#f97316">返回站点</a></p>'
+    : "";
+  const unsub = unsubUrl
+    ? '<p style="margin-top:16px"><a href="' +
+      unsubUrl +
+      '" style="display:inline-block;padding:8px 18px;border:1px solid #d0d7de;border-radius:4px;color:#1f2328;text-decoration:none">取消订阅</a></p>'
     : "";
   return (
     '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">' +
@@ -638,6 +648,7 @@ function subscribeResultPage(title: string, message: string, siteUrl?: string): 
     '</h1><p style="color:#6b7280;margin:0">' +
     message +
     "</p>" +
+    unsub +
     back +
     "</div></body></html>"
   );
@@ -715,9 +726,11 @@ app.get("/api/subscribe/confirm", async (c) => {
       .bind(token)
       .run();
     const ok = ((r.meta as { changes?: number } | undefined)?.changes ?? 0) > 0;
+    const unsubUrl =
+      new URL(c.req.url).origin + "/api/subscribe/unsubscribe?token=" + token;
     return c.html(
       ok
-        ? subscribeResultPage("订阅成功", "你已成功订阅，感谢关注！", cfg.siteUrl)
+        ? subscribeResultPage("订阅成功", "你已成功订阅，感谢关注！", cfg.siteUrl, unsubUrl)
         : subscribeResultPage("链接无效", "该确认链接已失效或不存在。", cfg.siteUrl),
       ok ? 200 : 404
     );

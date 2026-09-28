@@ -16,149 +16,39 @@
 <%} %>
 
 <% if (theme.waline && theme.waline.serverURL) { %>
-<!-- 订阅本博客（位于评论区下方） -->
-<section id="blog-subscribe" class="blog-subscribe">
-    <style>
-        .blog-subscribe {
-            margin-top: 24px;
-            padding: 22px 24px;
-            border-radius: 10px;
-            background: #fff;
-            box-shadow: 0 2px 12px rgba(0, 0, 0, .06);
-            border: 1px solid rgba(63, 81, 181, .12);
-        }
-        .blog-subscribe-title {
-            margin: 0 0 6px;
-            font-size: 18px;
-            font-weight: 600;
-            color: #3f51b5;
-            display: flex;
-            align-items: center;
-        }
-        .blog-subscribe-title:before {
-            content: "\2709";
-            margin-right: 8px;
-            font-size: 16px;
-        }
-        .blog-subscribe-desc {
-            margin: 0 0 14px;
-            font-size: 13px;
-            color: #757575;
-            line-height: 1.7;
-        }
-        .blog-subscribe-form {
-            display: flex;
-            gap: 10px;
-            flex-wrap: wrap;
-        }
-        .blog-subscribe-input {
-            flex: 1 1 220px;
-            min-width: 0;
-            height: 42px;
-            padding: 0 14px;
-            font-size: 14px;
-            color: #212121;
-            background: #f7f8fc;
-            border: 1px solid #d5d9ea;
-            border-radius: 8px;
-            outline: none;
-            box-sizing: border-box;
-            transition: border-color .2s, box-shadow .2s;
-        }
-        .blog-subscribe-input:focus {
-            border-color: #3f51b5;
-            box-shadow: 0 0 0 3px rgba(63, 81, 181, .15);
-        }
-        .blog-subscribe-btn {
-            flex: 0 0 auto;
-            height: 42px;
-            padding: 0 26px;
-            font-size: 14px;
-            font-weight: 500;
-            color: #fff;
-            background: #3f51b5;
-            border: none;
-            border-radius: 8px;
-            cursor: pointer;
-            transition: background .2s, opacity .2s;
-        }
-        .blog-subscribe-btn:hover { background: #3949ab; }
-        .blog-subscribe-btn:disabled { opacity: .6; cursor: not-allowed; }
-        .blog-subscribe-msg {
-            margin: 12px 0 0;
-            font-size: 13px;
-            line-height: 1.6;
-            min-height: 18px;
-        }
-        .blog-subscribe-msg.ok { color: #2e7d32; }
-        .blog-subscribe-msg.err { color: #c62828; }
-        html.theme-dark .blog-subscribe {
-            background: #1e1e2e;
-            border-color: rgba(121, 134, 203, .25);
-            box-shadow: none;
-        }
-        html.theme-dark .blog-subscribe-title { color: #7986cb; }
-        html.theme-dark .blog-subscribe-desc { color: #9e9e9e; }
-        html.theme-dark .blog-subscribe-input {
-            background: #2a2a3d;
-            color: #e0e0e0;
-            border-color: #44445a;
-        }
-        html.theme-dark .blog-subscribe-btn { background: #7986cb; }
-        html.theme-dark .blog-subscribe-btn:hover { background: #5c6bc0; }
-        html.theme-dark .blog-subscribe-msg.ok { color: #81c784; }
-        html.theme-dark .blog-subscribe-msg.err { color: #ef9a9a; }
-    </style>
-    <h3 class="blog-subscribe-title">订阅本博客</h3>
-    <p class="blog-subscribe-desc">输入邮箱即可订阅，新文章发布后会第一时间邮件通知你。</p>
-    <form class="blog-subscribe-form" id="blogSubscribeForm" autocomplete="off">
-        <input class="blog-subscribe-input" id="blogSubscribeEmail" type="email"
-            placeholder="请输入你的邮箱" required />
-        <button class="blog-subscribe-btn" id="blogSubscribeBtn" type="submit">订阅</button>
-    </form>
-    <p class="blog-subscribe-msg" id="blogSubscribeMsg"></p>
-    <script>
-        (function () {
-            var API = <%- JSON.stringify(String(theme.waline.serverURL || '').replace(/\/waline\/?$/, '')) %>;
-            var form = document.getElementById('blogSubscribeForm');
-            if (!form) return;
-            var input = document.getElementById('blogSubscribeEmail');
-            var btn = document.getElementById('blogSubscribeBtn');
-            var msg = document.getElementById('blogSubscribeMsg');
-            form.addEventListener('submit', function (e) {
-                e.preventDefault();
-                var email = (input.value || '').trim();
-                if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-                    msg.className = 'blog-subscribe-msg err';
-                    msg.textContent = '请输入正确的邮箱地址';
-                    return;
-                }
-                btn.disabled = true;
-                msg.className = 'blog-subscribe-msg';
-                msg.textContent = '提交中…';
-                fetch(API + '/api/subscribe', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ email: email })
-                }).then(function (r) { return r.json().catch(function () { return {}; }); })
-                    .then(function (data) {
-                        if (data && data.ok) {
-                            msg.className = 'blog-subscribe-msg ok';
-                            msg.textContent = data.message || '订阅成功';
-                            input.value = '';
-                        } else {
-                            msg.className = 'blog-subscribe-msg err';
-                            msg.textContent = (data && data.error) || '订阅失败，请稍后重试';
-                        }
-                    })
-                    .catch(function () {
-                        msg.className = 'blog-subscribe-msg err';
-                        msg.textContent = '网络异常，请稍后重试';
-                    })
-                    .finally(function () { btn.disabled = false; });
-            });
-        })();
-    </script>
-</section>
-<!-- 订阅本博客 end -->
+<h1>订阅博客</h1>
+<form id="blogSubscribeForm" autocomplete="off">
+    <input type="email" id="blogSubscribeEmail" placeholder="请输入邮箱" required>
+    <button type="submit">订阅</button>
+</form>
+<p id="blogSubscribeMsg"></p>
+<script>
+    (function () {
+        var API = <%- JSON.stringify(String(theme.waline.serverURL || '').replace(/\/waline\/?$/, '')) %>;
+        var form = document.getElementById('blogSubscribeForm');
+        if (!form) return;
+        var input = document.getElementById('blogSubscribeEmail');
+        var msg = document.getElementById('blogSubscribeMsg');
+        form.addEventListener('submit', function (e) {
+            e.preventDefault();
+            var email = (input.value || '').trim();
+            if (!email) return;
+            msg.textContent = '提交中…';
+            fetch(API + '/api/subscribe', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email: email })
+            }).then(function (r) { return r.json().catch(function () { return {}; }); })
+                .then(function (data) {
+                    if (data && data.ok) {
+                        msg.textContent = data.message || '订阅成功';
+                        input.value = '';
+                    } else {
+                        msg.textContent = (data && data.error) || '订阅失败，请稍后重试';
+                    }
+                })
+                .catch(function () { msg.textContent = '网络异常，请稍后重试'; });
+        });
+    })();
+</script>
 <% } %>
