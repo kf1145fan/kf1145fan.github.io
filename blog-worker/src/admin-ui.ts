@@ -153,6 +153,26 @@ a{color:var(--accent);text-decoration:none}
 .wk-badge.running{background:#fff3cd;color:#8a6d00}
 .wk-badge.wait{background:var(--hover);color:var(--muted)}
 @media(prefers-color-scheme:dark){.wk-badge.success{color:#4ade80;background:rgba(74,222,128,.12)}.wk-badge.fail{color:#f87171;background:rgba(248,113,113,.12)}.wk-badge.running{color:#fbbf24;background:rgba(251,191,36,.12)}}
+
+/* AI 助手（聊天） */
+.ai-chat{display:flex;gap:14px;padding:14px;height:calc(100vh - 190px);min-height:420px}
+.ai-side{width:220px;flex-shrink:0;display:flex;flex-direction:column;min-width:0;border-right:1px solid var(--border);padding-right:12px}
+.ai-conv-list{flex:1;overflow:auto;display:flex;flex-direction:column;gap:6px}
+.ai-conv{display:flex;align-items:center;gap:6px;padding:6px 8px;border:1px solid var(--border);border-radius:4px;cursor:pointer;font-size:13px}
+.ai-conv:hover{border-color:var(--accent)}
+.ai-conv.active{border-color:var(--accent);background:var(--hover)}
+.ai-conv-t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ai-main{flex:1;display:flex;flex-direction:column;min-width:0}
+.ai-messages{flex:1;overflow:auto;display:flex;flex-direction:column;gap:12px;padding:6px 4px}
+.ai-msg{display:flex;flex-direction:column;gap:4px;max-width:86%}
+.ai-msg.user{align-self:flex-end;align-items:flex-end}
+.ai-msg.assistant{align-self:flex-start}
+.ai-who{font-size:11px;color:var(--muted)}
+.ai-body{white-space:pre-wrap;word-break:break-word;line-height:1.7;font-size:14px;padding:8px 12px;border-radius:6px;background:var(--hover);border:1px solid var(--border)}
+.ai-msg.user .ai-body{background:var(--accent);color:#fff;border-color:var(--accent)}
+.ai-input{display:flex;gap:8px;align-items:flex-end;margin-top:10px}
+.ai-input textarea{flex:1;resize:vertical;min-height:56px}
+@media(max-width:640px){.ai-chat{flex-direction:column;height:auto}.ai-side{width:auto;border-right:none;border-bottom:1px solid var(--border);padding:0 0 12px}.ai-messages{min-height:300px}}
 `;
 
 const SCRIPT = `
@@ -238,7 +258,7 @@ function go(name){
     if(name==='build') loadBuildHistory();
     if(name==='visit') loadVisit();
     if(name==='subscribe') loadSubscribe();
-    if(name==='ai'){ /* AI 助手：占位页，暂未开放 */ }
+    if(name==='ai') loadAiChat();
     if(name==='settings'){ loadSubscribeSettings(); loadSiteSettings(); loadAiSettings(); }
     window.scrollTo(0,0);
   }
@@ -490,6 +510,168 @@ function pickAiModel(i){
   if(m == null) return;
   const el = $('#aiModel'); if(el) el.value = m;
   toast('已填入模型：' + m);
+}
+
+// ---------- AI 助手（聊天：流式输出 + 历史记录）----------
+let aiConvId = null;          // 当前会话 id（null 表示新对话，首次保存后回填）
+let aiConvMessages = [];      // [{role, content}]
+let aiStreaming = false;      // 是否正在流式接收
+let aiAbort = null;           // 中止控制器
+
+async function loadAiChat(){
+  // 进入页面：加载历史会话列表 + 默认模型提示
+  loadAiConversations();
+  try{
+    const r = await api('/admin/api/ai/settings');
+    const m = $('#aiChatModel');
+    if(m && !m.value && r.ok && r.data) m.value = r.data.model || '';
+    const hint = $('#aiChatHint');
+    if(hint) hint.textContent = (r.ok && r.data && r.data.baseUrl) ? '' : '尚未配置 AI，请到「设置 → AI 设置」填写';
+  }catch(e){}
+}
+async function loadAiConversations(){
+  const box = $('#aiConvList'); if(!box) return;
+  try{
+    const r = await api('/admin/api/ai/conversations');
+    if(!r.ok || !r.data){ box.innerHTML = '<div class="empty">加载失败</div>'; return; }
+    const list = (r.data.list || []);
+    if(!list.length){ box.innerHTML = '<div class="empty">暂无历史会话</div>'; return; }
+    box.innerHTML = list.map(c=>{
+      const active = (c.id === aiConvId) ? ' active' : '';
+      return '<div class="ai-conv'+active+'" data-id="'+c.id+'" onclick="aiOpenConv('+c.id+')">'+
+        '<span class="ai-conv-t">'+esc(c.title || '未命名对话')+'</span>'+
+        '<button class="wk-btn ghost sm" onclick="event.stopPropagation();aiDelConv('+c.id+')">删</button>'+
+      '</div>';
+    }).join('');
+  }catch(e){ box.innerHTML = '<div class="empty">加载失败</div>'; }
+}
+function aiNewChat(){
+  if(aiStreaming){ toast('正在回复中，请稍候', true); return; }
+  aiConvId = null; aiConvMessages = [];
+  renderAiMessages();
+  loadAiConversations();
+  const i = $('#aiInput'); if(i) i.focus();
+}
+async function aiOpenConv(id){
+  if(aiStreaming){ toast('正在回复中，请稍候', true); return; }
+  const r = await api('/admin/api/ai/conversation?id=' + id);
+  if(!r.ok || !r.data || !r.data.conversation){ toast('加载会话失败', true); return; }
+  const c = r.data.conversation;
+  aiConvId = c.id;
+  aiConvMessages = Array.isArray(c.messages) ? c.messages : [];
+  renderAiMessages();
+  loadAiConversations();
+}
+async function aiDelConv(id){
+  if(!confirm('确认删除该会话？')) return;
+  const r = await api('/admin/api/ai/conversation?id=' + id, { method:'DELETE' });
+  if(r.ok){ if(aiConvId === id) aiNewChat(); else loadAiConversations(); }
+  else toast('删除失败', true);
+}
+function renderAiMessages(){
+  const box = $('#aiMessages'); if(!box) return;
+  if(!aiConvMessages.length){ box.innerHTML = '<div class="empty">开始和 AI 对话吧</div>'; return; }
+  box.innerHTML = aiConvMessages.map(m => aiBubbleHtml(m.role, m.content)).join('');
+  scrollAiBottom();
+}
+function aiBubbleHtml(role, content){
+  const isUser = role === 'user';
+  return '<div class="ai-msg '+(isUser?'user':'assistant')+'">'+
+    '<div class="ai-who">'+(isUser?'我':'AI')+'</div>'+
+    '<div class="ai-body">'+esc(content)+'</div></div>';
+}
+function scrollAiBottom(){ const box = $('#aiMessages'); if(box) box.scrollTop = box.scrollHeight; }
+function aiStop(){ if(aiAbort){ try{ aiAbort.abort(); }catch(e){} } }
+
+async function aiSend(){
+  if(aiStreaming) return;
+  const input = $('#aiInput');
+  const text = ((input && input.value) || '').trim();
+  if(!text){ toast('请输入内容', true); return; }
+  const box = $('#aiMessages');
+  aiConvMessages.push({ role:'user', content:text });
+  if(input) input.value = '';
+  if(box && box.querySelector('.empty')) box.innerHTML = '';
+  if(box) box.insertAdjacentHTML('beforeend', aiBubbleHtml('user', text));
+  if(box) box.insertAdjacentHTML('beforeend', '<div class="ai-msg assistant" id="aiCurAssistant"><div class="ai-who">AI</div><div class="ai-body"></div></div>');
+  const bodyEl = box ? box.querySelector('#aiCurAssistant .ai-body') : null;
+  scrollAiBottom();
+
+  aiStreaming = true;
+  const sendBtn = $('#aiSendBtn'); if(sendBtn) sendBtn.disabled = true;
+  const stopBtn = $('#aiStopBtn'); if(stopBtn) stopBtn.style.display = '';
+  const msg = $('#aiChatMsg'); if(msg){ msg.className = 'msg'; msg.textContent = ''; }
+  aiAbort = new AbortController();
+
+  const modelEl = $('#aiChatModel');
+  let acc = '';
+  try{
+    const headers = { 'Content-Type':'application/json' };
+    if(token) headers['Authorization'] = 'Bearer ' + token;
+    const resp = await fetch('/admin/api/ai/chat', {
+      method:'POST',
+      headers: headers,
+      signal: aiAbort.signal,
+      body: JSON.stringify({ messages: aiConvMessages, model: modelEl ? modelEl.value.trim() : '' })
+    });
+    const ct = resp.headers.get('content-type') || '';
+    if(!resp.ok || ct.indexOf('application/json') >= 0){
+      const d = await resp.json().catch(()=>({}));
+      throw new Error((d && d.error) || ('HTTP ' + resp.status));
+    }
+    const reader = resp.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    while(true){
+      const chunk = await reader.read();
+      if(chunk.done) break;
+      buf += dec.decode(chunk.value, { stream:true });
+      let idx;
+      while((idx = buf.indexOf('\n')) >= 0){
+        const line = buf.slice(0, idx).trim();
+        buf = buf.slice(idx + 1);
+        if(!line || line.indexOf('data:') !== 0) continue;
+        const payload = line.slice(5).trim();
+        if(payload === '[DONE]'){ buf = ''; break; }
+        try{
+          const j = JSON.parse(payload);
+          const delta = j.choices && j.choices[0] && j.choices[0].delta && j.choices[0].delta.content;
+          if(delta){ acc += delta; if(bodyEl){ bodyEl.textContent = acc; scrollAiBottom(); } }
+        }catch(e){ /* 忽略非 JSON 心跳行 */ }
+      }
+    }
+  }catch(e){
+    if(e && e.name === 'AbortError'){
+      if(msg){ msg.className = 'msg'; msg.textContent = '已停止生成'; }
+    } else {
+      const err = (e && e.message) ? e.message : String(e);
+      if(msg){ msg.className = 'msg err'; msg.textContent = '请求失败：' + err; }
+      toast('请求失败：' + err, true);
+    }
+  }finally{
+    aiStreaming = false; aiAbort = null;
+    if(sendBtn) sendBtn.disabled = false;
+    if(stopBtn) stopBtn.style.display = 'none';
+  }
+
+  if(acc){
+    aiConvMessages.push({ role:'assistant', content: acc });
+  } else {
+    const cur = $('#aiCurAssistant'); if(cur) cur.remove();
+  }
+  await aiSaveConversation();
+  scrollAiBottom();
+}
+
+async function aiSaveConversation(){
+  if(!aiConvMessages.length) return;
+  const firstUser = aiConvMessages.find(m => m.role === 'user');
+  const title = firstUser ? firstUser.content.slice(0, 30) : '新对话';
+  const r = await api('/admin/api/ai/conversation', {
+    method:'PUT',
+    body: JSON.stringify({ id: aiConvId, title: title, messages: aiConvMessages })
+  });
+  if(r.ok && r.data && r.data.id){ aiConvId = r.data.id; loadAiConversations(); }
 }
 
 // ---------- 订阅管理（SMTP 配置 + 订阅者 + 群发）----------
@@ -1276,6 +1458,11 @@ document.addEventListener('DOMContentLoaded', ()=>{
     try{ localStorage.removeItem('TOKEN'); }catch(e){}
     location.replace('/admin/login');
   };
+  // AI 助手：Enter 发送，Shift+Enter 换行
+  const aiInputEl = $('#aiInput');
+  if(aiInputEl) aiInputEl.addEventListener('keydown', e=>{
+    if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); aiSend(); }
+  });
   // 新建文章：重置表单后 SPA 进入写作页（不刷新）
   $('#newBtn').onclick=()=>{
     editingPath='';
@@ -1587,12 +1774,30 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
     </div>
   </div>
 
-  <!-- AI 助手（占位页） -->
+  <!-- AI 助手（聊天：流式输出 + 历史记录） -->
   <div id="page-ai" class="${pageCls("ai")}">
-    <div class="wk-card">
-      <h3 class="wk-title">AI 助手</h3>
-      <div class="empty" style="padding:48px 12px;text-align:center;line-height:1.9">
-        功能开发中，敬请期待。
+    <div class="wk-card ai-chat">
+      <div class="ai-side">
+        <div class="filters" style="margin:0 0 8px">
+          <button class="wk-btn sm" onclick="aiNewChat()">＋ 新对话</button>
+          <button class="wk-btn ghost sm" onclick="loadAiConversations()">刷新</button>
+        </div>
+        <div id="aiConvList" class="ai-conv-list"><div class="empty">加载中...</div></div>
+      </div>
+      <div class="ai-main">
+        <div class="filters" style="margin:0 0 8px;align-items:center">
+          <span class="wk-label" style="margin:0">模型</span>
+          <input class="wk-input" id="aiChatModel" style="width:220px" placeholder="使用默认模型">
+          <span class="wk-label" id="aiChatHint" style="margin:0"></span>
+          <div style="flex:1"></div>
+          <button class="wk-btn ghost sm" id="aiStopBtn" style="display:none" onclick="aiStop()">停止</button>
+        </div>
+        <div id="aiMessages" class="ai-messages"><div class="empty">开始和 AI 对话吧</div></div>
+        <div class="ai-input">
+          <textarea class="wk-input" id="aiInput" rows="3" placeholder="输入消息，Enter 发送，Shift+Enter 换行"></textarea>
+          <button class="wk-btn sm" id="aiSendBtn" onclick="aiSend()">发送</button>
+        </div>
+        <div class="msg" id="aiChatMsg"></div>
       </div>
     </div>
   </div>
@@ -1863,6 +2068,36 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
             <div>
               <div class="name"><span class="chip">GET</span> /admin/api/ai/models</div>
               <div class="meta">获取全部可用模型。调用 {baseUrl}/models，返回 {ok, count, models:[id...]}</div>
+            </div>
+          </li>
+          <li>
+            <div>
+              <div class="name"><span class="chip">POST</span> /admin/api/ai/chat</div>
+              <div class="meta">聊天（流式）。body {"messages":[...],"model"?}，转发到 {baseUrl}/chat/completions 并原样回传 SSE（text/event-stream）</div>
+            </div>
+          </li>
+          <li>
+            <div>
+              <div class="name"><span class="chip">GET</span> /admin/api/ai/conversations</div>
+              <div class="meta">历史会话列表。返回 {ok, list:[{id,title,createdAt,updatedAt}]}</div>
+            </div>
+          </li>
+          <li>
+            <div>
+              <div class="name"><span class="chip">GET</span> /admin/api/ai/conversation?id=</div>
+              <div class="meta">单个会话（含消息）。返回 {ok, conversation:{id,title,messages}}</div>
+            </div>
+          </li>
+          <li>
+            <div>
+              <div class="name"><span class="chip">PUT</span> /admin/api/ai/conversation</div>
+              <div class="meta">保存会话。body {"id"?,"title","messages"}，id 存在则更新，否则新建，返回 {ok, id}</div>
+            </div>
+          </li>
+          <li>
+            <div>
+              <div class="name"><span class="chip">DELETE</span> /admin/api/ai/conversation?id=</div>
+              <div class="meta">删除历史会话</div>
             </div>
           </li>
         </ul>

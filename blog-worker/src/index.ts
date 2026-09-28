@@ -597,6 +597,177 @@ app.get("/admin/api/ai/models", async (c) => {
   }
 });
 
+// ---------- 3.59 AI 助手（聊天：流式输出 + 历史记录）----------
+// 历史会话存于 D1 表 wl_AiConversation（messages 为 JSON 数组），表按需创建。
+let aiTablesReady: Promise<unknown> | null = null;
+function ensureAiTables(db: D1Database): Promise<unknown> {
+  if (!aiTablesReady) {
+    aiTablesReady = db
+      .prepare(
+        `CREATE TABLE IF NOT EXISTS "wl_AiConversation" (
+          "id" INTEGER PRIMARY KEY AUTOINCREMENT,
+          "title" TEXT NOT NULL DEFAULT '',
+          "messages" TEXT NOT NULL DEFAULT '[]',
+          "createdAt" TEXT DEFAULT (datetime('now')),
+          "updatedAt" TEXT DEFAULT (datetime('now'))
+        )`
+      )
+      .run()
+      .catch((e) => {
+        aiTablesReady = null; // 失败则下次重试
+        throw e;
+      });
+  }
+  return aiTablesReady;
+}
+
+// GET 会话列表（管理员）
+app.get("/admin/api/ai/conversations", async (c) => {
+  if (!isAdmin(c.get("userInfo"))) return json({ error: "unauthorized" }, 401);
+  const db = (c.env as Bindings).DB;
+  try {
+    await ensureAiTables(db);
+    const rows = await db
+      .prepare(
+        `SELECT "id","title","createdAt","updatedAt" FROM "wl_AiConversation" ORDER BY "updatedAt" DESC LIMIT 100`
+      )
+      .all();
+    return json({ ok: true, list: rows.results || [] });
+  } catch (e) {
+    return json({ ok: false, error: String(e) }, 500);
+  }
+});
+
+// GET 单个会话（含消息）（管理员）
+app.get("/admin/api/ai/conversation", async (c) => {
+  if (!isAdmin(c.get("userInfo"))) return json({ error: "unauthorized" }, 401);
+  const db = (c.env as Bindings).DB;
+  const id = parseInt(c.req.query("id") || "", 10);
+  if (!Number.isFinite(id)) return json({ ok: false, error: "id 无效" }, 400);
+  try {
+    await ensureAiTables(db);
+    const row = await db
+      .prepare(
+        `SELECT "id","title","messages","createdAt","updatedAt" FROM "wl_AiConversation" WHERE "id"=?1`
+      )
+      .bind(id)
+      .first<{ id: number; title: string; messages: string; createdAt: string; updatedAt: string }>();
+    if (!row) return json({ ok: false, error: "未找到会话" }, 404);
+    let messages: unknown = [];
+    try {
+      messages = JSON.parse(row.messages || "[]");
+    } catch (e) {}
+    return json({
+      ok: true,
+      conversation: {
+        id: row.id,
+        title: row.title,
+        messages,
+        createdAt: row.createdAt,
+        updatedAt: row.updatedAt,
+      },
+    });
+  } catch (e) {
+    return json({ ok: false, error: String(e) }, 500);
+  }
+});
+
+// PUT 保存会话（管理员）：body {id?, title?, messages}，id 存在则更新，否则新建
+app.put("/admin/api/ai/conversation", async (c) => {
+  if (!isAdmin(c.get("userInfo"))) return json({ error: "unauthorized" }, 401);
+  const db = (c.env as Bindings).DB;
+  const body = (await c.req.json().catch(() => ({}))) as {
+    id?: unknown;
+    title?: unknown;
+    messages?: unknown;
+  };
+  const messages = Array.isArray(body.messages) ? body.messages : [];
+  const title = String(body.title ?? "").trim().slice(0, 100);
+  const id = parseInt(String(body.id ?? ""), 10);
+  try {
+    await ensureAiTables(db);
+    if (Number.isFinite(id) && id > 0) {
+      const r = await db
+        .prepare(
+          `UPDATE "wl_AiConversation" SET "title"=?1,"messages"=?2,"updatedAt"=datetime('now') WHERE "id"=?3`
+        )
+        .bind(title, JSON.stringify(messages), id)
+        .run();
+      if (((r.meta as { changes?: number } | undefined)?.changes ?? 0) > 0) {
+        return json({ ok: true, id, updated: true });
+      }
+    }
+    const ins = await db
+      .prepare(`INSERT INTO "wl_AiConversation" ("title","messages") VALUES (?1,?2)`)
+      .bind(title, JSON.stringify(messages))
+      .run();
+    return json({ ok: true, id: (ins.meta as { last_row_id?: number } | undefined)?.last_row_id, created: true });
+  } catch (e) {
+    return json({ ok: false, error: String(e) }, 500);
+  }
+});
+
+// DELETE 删除会话（管理员）
+app.delete("/admin/api/ai/conversation", async (c) => {
+  if (!isAdmin(c.get("userInfo"))) return json({ error: "unauthorized" }, 401);
+  const db = (c.env as Bindings).DB;
+  const id = parseInt(c.req.query("id") || "", 10);
+  if (!Number.isFinite(id)) return json({ ok: false, error: "id 无效" }, 400);
+  try {
+    await ensureAiTables(db);
+    const r = await db.prepare(`DELETE FROM "wl_AiConversation" WHERE "id"=?1`).bind(id).run();
+    return json({ ok: true, deleted: ((r.meta as { changes?: number } | undefined)?.changes ?? 0) > 0 });
+  } catch (e) {
+    return json({ ok: false, error: String(e) }, 500);
+  }
+});
+
+// POST 聊天（管理员，流式）：转发到 OpenAI 兼容接口，原样回传 SSE（text/event-stream）
+// body {messages, model?, baseUrl?, apiKey?}，未传 model/baseUrl/apiKey 则用已保存配置
+app.post("/admin/api/ai/chat", async (c) => {
+  if (!isAdmin(c.get("userInfo"))) return json({ error: "unauthorized" }, 401);
+  const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+  const cfg = await getAiConfig((c.env as Bindings).DB);
+  const baseUrl = String(body.baseUrl || cfg.baseUrl || "").trim();
+  const apiKey = String(body.apiKey || cfg.apiKey || "");
+  const model = String(body.model || cfg.model || "").trim();
+  const messages = Array.isArray(body.messages) ? body.messages : [];
+  if (!baseUrl) return json({ ok: false, error: "请先在「设置 → AI 设置」填写并保存 API 地址" }, 400);
+  if (!model) return json({ ok: false, error: "请先填写默认模型（或在聊天页指定模型）" }, 400);
+  if (!messages.length) return json({ ok: false, error: "messages required" }, 400);
+  try {
+    const upstream = await fetch(aiEndpoint(baseUrl, "/chat/completions"), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "text/event-stream",
+        ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+      },
+      body: JSON.stringify({ model, messages, stream: true }),
+    });
+    if (!upstream.ok || !upstream.body) {
+      const text = await upstream.text().catch(() => "");
+      let detail: unknown = text.slice(0, 300) || `HTTP ${upstream.status}`;
+      try {
+        const d = JSON.parse(text);
+        detail = d?.error?.message || d?.error || detail;
+      } catch (e) {}
+      return json({ ok: false, status: upstream.status, error: String(detail) }, 502);
+    }
+    // 原样透传上游 SSE
+    return new Response(upstream.body, {
+      status: 200,
+      headers: {
+        "Content-Type": "text/event-stream; charset=utf-8",
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",
+      },
+    });
+  } catch (e) {
+    return json({ ok: false, error: String(e) }, 500);
+  }
+});
+
 // ---------- 3.6 邮件订阅 API ----------
 // SMTP 配置存于 wl_Settings(key=subscribe_config)，订阅者存于 wl_Subscriber。
 // 公开接口（/api/subscribe*）允许跨域，方便在任意站点调用；管理接口走 /admin/api/*。
