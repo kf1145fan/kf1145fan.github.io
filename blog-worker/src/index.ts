@@ -291,30 +291,20 @@ app.put("/admin/api/post", async (c) => {
   return handleWritePost(c.env as Bindings, await c.req.json(), true);
 });
 
+// 删除文章（移入回收站）：DELETE /admin/api/post?path=xxx
 app.delete("/admin/api/post", async (c) => {
   if (!isAdmin(c.get("userInfo"))) return json({ error: "unauthorized" }, 401);
   const path = c.req.query("path") || "";
   if (!path) return json({ error: "path required" }, 400);
-  return handleDeletePost(c.env as Bindings, path);
+  const r = await handleRecyclePaths(c.env as Bindings, [path]);
+  return json({ ...r, message: r.moved ? "已移入回收站" : "" });
 });
 
-// 批量删除文章：POST /admin/api/posts/delete  body { paths: string[] }
+// 批量删除文章（移入回收站）：POST /admin/api/posts/delete  body { paths: string[] }
 app.post("/admin/api/posts/delete", async (c) => {
   if (!isAdmin(c.get("userInfo"))) return json({ error: "unauthorized" }, 401);
   const body = (await c.req.json().catch(() => ({}))) as { paths?: unknown };
-  const paths = Array.isArray(body.paths)
-    ? body.paths.map((x) => String(x)).filter(Boolean)
-    : [];
-  if (!paths.length) return json({ ok: false, error: "paths required" }, 400);
-  const env = c.env as Bindings;
-  const results: Array<{ path: string; ok: boolean; error?: string }> = [];
-  for (const p of paths) {
-    const r = await handleDeletePost(env, p);
-    const d = (await r.json().catch(() => ({}))) as { ok?: boolean; error?: string };
-    results.push({ path: p, ok: r.ok && !!d.ok, error: d?.error });
-  }
-  const deleted = results.filter((r) => r.ok).length;
-  return json({ ok: deleted > 0, deleted, total: paths.length, results });
+  return json(await handleRecyclePaths(c.env as Bindings, body.paths));
 });
 
 // 批量上传文章：POST /admin/api/posts/upload  body { files: [{name, content}] }
@@ -1079,12 +1069,23 @@ app.put("/admin/api/file", async (c) => {
   return handleSaveFile(c.env as Bindings, await c.req.json());
 });
 
-app.delete("/admin/api/file", async (c) => {
+// 回收站：批量移入 / 恢复 / 彻底删除（回收站为同分支下的 _recycle 目录，不单独开分支）
+app.post("/admin/api/files/recycle", async (c) => {
   if (!isAdmin(c.get("userInfo"))) return json({ error: "unauthorized" }, 401);
-  const path = c.req.query("path") || "";
-  if (!path) return json({ error: "path required" }, 400);
-  const branch = c.req.query("branch") || "";
-  return handleDeleteFile(c.env as Bindings, path, branch || undefined);
+  const body = (await c.req.json().catch(() => ({}))) as { paths?: unknown; branch?: unknown };
+  return json(await handleRecyclePaths(c.env as Bindings, body.paths, body.branch));
+});
+
+app.post("/admin/api/files/restore", async (c) => {
+  if (!isAdmin(c.get("userInfo"))) return json({ error: "unauthorized" }, 401);
+  const body = (await c.req.json().catch(() => ({}))) as { paths?: unknown; branch?: unknown };
+  return json(await handleRestorePaths(c.env as Bindings, body.paths, body.branch));
+});
+
+app.post("/admin/api/files/purge", async (c) => {
+  if (!isAdmin(c.get("userInfo"))) return json({ error: "unauthorized" }, 401);
+  const body = (await c.req.json().catch(() => ({}))) as { paths?: unknown; branch?: unknown };
+  return json(await handlePurgePaths(c.env as Bindings, body.paths, body.branch));
 });
 
 app.post("/admin/api/upload", async (c) => {
@@ -1343,24 +1344,143 @@ async function handleWritePost(
   }
 }
 
-async function handleDeletePost(env: Bindings, path: string): Promise<Response> {
-  const { token, repo, branch, headers } = ghConfig(env);
-  if (!token) return json({ ok: false, error: "GH_TOKEN not configured" }, 500);
+// ---------- 回收站（同分支 _recycle 目录，可恢复 / 彻底删除）----------
+const RECYCLE_DIR = "_recycle";
+
+type OpResult = { path: string; ok: boolean; moved?: string; error?: string };
+
+// 读取仓库节点（文件或目录）；不存在返回 null
+async function ghGetNode(env: Bindings, path: string, branch: string): Promise<any | null> {
+  const { repo, headers } = ghConfig(env);
   try {
-    const rawApi = `https://api.github.com/repos/${repo}/contents/${encodeURIComponent(path)}`;
-    const exist = await fetch(rawApi, { headers });
-    if (!exist.ok) return json({ ok: false, error: "not found" }, 404);
-    const sha = ((await exist.json()) as any).sha;
-    const res = await fetch(rawApi, {
-      method: "DELETE",
-      headers,
-      body: JSON.stringify({ sha, message: `docs: delete post ${path}`, branch }),
-    });
-    if (!res.ok) return json({ ok: false, error: "github error " + res.status }, 502);
-    return json({ ok: true, message: "已删除" });
-  } catch (e) {
-    return json({ ok: false, error: String(e) }, 500);
+    const res = await fetch(
+      `https://api.github.com/repos/${repo}/contents/${ghPath(path)}?ref=${encodeURIComponent(branch)}`,
+      { headers },
+    );
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
   }
+}
+
+// 目标已存在时自动加序号，避免覆盖
+async function freePath(env: Bindings, path: string, branch: string): Promise<string> {
+  if (!(await ghGetNode(env, path, branch))) return path;
+  const idx = path.lastIndexOf("/");
+  const dir = idx >= 0 ? path.slice(0, idx) : "";
+  const base = idx >= 0 ? path.slice(idx + 1) : path;
+  const dot = base.lastIndexOf(".");
+  const stem = dot > 0 ? base.slice(0, dot) : base;
+  const ext = dot > 0 ? base.slice(dot) : "";
+  for (let i = 1; i <= 100; i++) {
+    const cand = (dir ? dir + "/" : "") + `${stem}-${i}${ext}`;
+    if (!(await ghGetNode(env, cand, branch))) return cand;
+  }
+  return `${path}-${Date.now()}`;
+}
+
+// 移动文件/目录（目录递归），返回实际落点
+async function movePath(
+  env: Bindings,
+  from: string,
+  to: string,
+  branch: string,
+): Promise<{ ok: boolean; moved?: string; error?: string }> {
+  const { token, repo, headers } = ghConfig(env);
+  if (!token) return { ok: false, error: "GH_TOKEN not configured" };
+  const node = await ghGetNode(env, from, branch);
+  if (!node) return { ok: false, error: "未找到 " + from };
+
+  if (Array.isArray(node)) {
+    const target = await freePath(env, to, branch);
+    for (const f of node as any[]) {
+      const rel = String(f.path).slice(String(from).length).replace(/^\/+/, "");
+      const r = await movePath(env, f.path, `${target}/${rel}`, branch);
+      if (!r.ok) return r;
+    }
+    return { ok: true, moved: target };
+  }
+
+  const target = await freePath(env, to, branch);
+  let content: string = node.content || "";
+  if (!content && node.git_url) {
+    // 超过 1MB 的文件 contents API 不返回内容，改取 blob
+    try {
+      const b = await fetch(node.git_url, { headers });
+      if (b.ok) content = ((await b.json()) as any).content || "";
+    } catch {}
+  }
+  const put = await fetch(`https://api.github.com/repos/${repo}/contents/${ghPath(target)}`, {
+    method: "PUT",
+    headers,
+    body: JSON.stringify({ message: `docs: move ${from} -> ${target}`, content, branch }),
+  });
+  if (!put.ok) return { ok: false, error: "写入目标失败 " + put.status };
+  const del = await fetch(`https://api.github.com/repos/${repo}/contents/${ghPath(from)}`, {
+    method: "DELETE",
+    headers,
+    body: JSON.stringify({ sha: node.sha, message: `docs: move ${from} -> ${target}`, branch }),
+  });
+  if (!del.ok) return { ok: false, error: "删除源失败 " + del.status };
+  return { ok: true, moved: target };
+}
+
+function normalizePaths(input: unknown): string[] {
+  return Array.isArray(input)
+    ? input.map((x: unknown) => String(x).replace(/^\/+|\/+$/g, "")).filter(Boolean)
+    : [];
+}
+
+// 移入回收站（文章删除、文件管理删除、批量删除共用）
+async function handleRecyclePaths(env: Bindings, input: unknown, branchIn?: unknown) {
+  const branch = String(branchIn || "").trim() || ghConfig(env).branch;
+  const paths = normalizePaths(input);
+  const results: OpResult[] = [];
+  if (!paths.length) return { ok: false, error: "paths required", moved: 0, total: 0, results };
+  for (const p of paths) {
+    if (p === RECYCLE_DIR || p.startsWith(RECYCLE_DIR + "/")) {
+      results.push({ path: p, ok: false, error: "已在回收站中" });
+      continue;
+    }
+    const r = await movePath(env, p, `${RECYCLE_DIR}/${p}`, branch);
+    results.push({ path: p, ok: r.ok, moved: r.moved, error: r.error });
+  }
+  const moved = results.filter((r) => r.ok).length;
+  return { ok: moved > 0, moved, total: paths.length, results };
+}
+
+// 从回收站恢复（回到原路径）
+async function handleRestorePaths(env: Bindings, input: unknown, branchIn?: unknown) {
+  const branch = String(branchIn || "").trim() || ghConfig(env).branch;
+  const paths = normalizePaths(input);
+  const results: OpResult[] = [];
+  if (!paths.length) return { ok: false, error: "paths required", restored: 0, total: 0, results };
+  for (const p of paths) {
+    if (!p.startsWith(RECYCLE_DIR + "/")) {
+      results.push({ path: p, ok: false, error: "不在回收站中" });
+      continue;
+    }
+    const r = await movePath(env, p, p.slice(RECYCLE_DIR.length + 1), branch);
+    results.push({ path: p, ok: r.ok, moved: r.moved, error: r.error });
+  }
+  const restored = results.filter((r) => r.ok).length;
+  return { ok: restored > 0, restored, total: paths.length, results };
+}
+
+// 彻底删除（不可恢复）
+async function handlePurgePaths(env: Bindings, input: unknown, branchIn?: unknown) {
+  const branch = String(branchIn || "").trim() || ghConfig(env).branch;
+  const paths = normalizePaths(input);
+  const results: OpResult[] = [];
+  if (!paths.length) return { ok: false, error: "paths required", purged: 0, total: 0, results };
+  for (const p of paths) {
+    const r = await deletePath(env, p, branch);
+    const d = (await r.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+    results.push({ path: p, ok: r.ok && !!d.ok, error: d?.error });
+  }
+  const purged = results.filter((r) => r.ok).length;
+  return { ok: purged > 0, purged, total: paths.length, results };
 }
 
 // 批量上传 Markdown 文章：自动补 front matter，重名自动加序号
@@ -1702,10 +1822,6 @@ async function deletePath(env: Bindings, path: string, branch?: string): Promise
   } catch (e) {
     return json({ ok: false, error: String(e) }, 500);
   }
-}
-
-async function handleDeleteFile(env: Bindings, path: string, branch?: string): Promise<Response> {
-  return deletePath(env, path, branch);
 }
 
 // 上传文件（multipart：path=目标目录, branch=分支, files=多个文件）

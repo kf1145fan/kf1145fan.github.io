@@ -557,11 +557,11 @@ function updateBatchBar(){
 async function deleteSelectedPosts(){
   const paths=Array.from(selectedPosts);
   if(!paths.length) return;
-  if(!confirm('确认删除所选 '+paths.length+' 篇文章？')) return;
+  if(!confirm('确认删除所选 '+paths.length+' 篇文章？将移入回收站，可恢复。')) return;
   const r=await api(API_BASE+'/posts/delete',{method:'POST',body:JSON.stringify({paths:paths})});
   if(r.status===401){ redirectLogin(); return; }
   if(r.ok&&r.data&&r.data.ok){
-    toast('已删除 '+(r.data.deleted||0)+'/'+(r.data.total||paths.length)+' 篇');
+    toast('已移入回收站 '+(r.data.moved||0)+'/'+(r.data.total||paths.length)+' 篇');
     await loadPosts();
     await launchDeploy('已删除所选文章，工作流正在重建站点…');
   } else toast('批量删除失败：'+(r.data&&r.data.error||r.status),true);
@@ -636,11 +636,11 @@ async function savePost(){
   } else toast('保存失败：'+(r.data&&r.data.error||r.status),true);
 }
 async function delPost(path,name){
-  if(!confirm('确认删除文章「'+name+'」？')) return;
+  if(!confirm('确认删除文章「'+name+'」？将移入回收站，可恢复。')) return;
   const r=await api(API_BASE+'/post?path='+encodeURIComponent(path),{method:'DELETE'});
   if(r.status===401){ redirectLogin(); return; }
   if(r.ok&&r.data&&r.data.ok){
-    toast('已删除');
+    toast('已移入回收站');
     loadPosts();
     await launchDeploy('已删除「'+name+'」，工作流正在重建站点…');
   }
@@ -866,7 +866,10 @@ async function loadBuildHistory(){
 let filePath='';
 let fileBranch='';
 let branchesLoaded=false;
+let selectedFiles=new Set();
+const RECYCLE_DIR='_recycle';
 function curBranch(){ return fileBranch || 'main'; }
+function isRecycleView(){ return filePath===RECYCLE_DIR || filePath.indexOf(RECYCLE_DIR+'/')===0; }
 function fileApi(url){
   const sep=url.indexOf('?')>=0?'&':'?';
   return url+sep+'branch='+encodeURIComponent(curBranch());
@@ -914,31 +917,79 @@ async function loadFiles(){
   list.innerHTML='<li class="empty">加载中...</li>';
   const r=await api(fileApi(API_BASE+'/files?path='+encodeURIComponent(filePath)));
   if(r.status===401){ redirectLogin(); return; }
-  if(!r.ok){ list.innerHTML='<li class="empty">加载失败：'+(r.data&&r.data.error||r.status)+'</li>'; return; }
-  const items=(r.data&&r.data.items)||[];
+  selectedFiles.clear();
   renderCrumb();
+  updateFileToolbar();
+  if(!r.ok){
+    if(isRecycleView()){ list.innerHTML='<li class="empty">回收站是空的</li>'; hideFileBatchBar(); return; }
+    list.innerHTML='<li class="empty">加载失败：'+(r.data&&r.data.error||r.status)+'</li>'; hideFileBatchBar(); return;
+  }
+  const items=(r.data&&r.data.items)||[];
   list.innerHTML='';
-  if(!items.length){ list.innerHTML='<li class="empty">空目录</li>'; return; }
+  if(!items.length){ list.innerHTML='<li class="empty">'+(isRecycleView()?'回收站是空的':'空目录')+'</li>'; hideFileBatchBar(); return; }
+  const rc=isRecycleView();
   items.forEach(f=>{
     const li=document.createElement('li');
     const isDir=f.type==='dir';
     const isZip=/\.zip$/i.test(f.name||'');
     li.style.cursor=isDir?'pointer':'default';
-    // 文件夹：整行点击进入
-    if(isDir){
-      li.innerHTML='<div class="name">📁 '+esc(f.name)+'</div>'+
-        '<div class="ops"><button class="wk-btn danger sm" data-a="del">删除</button></div>';
+    const pick='<input type="checkbox" class="filePick" data-path="'+esc(f.path)+'" style="width:auto;flex-shrink:0">';
+    const label=isDir?('📁 '+esc(f.name)):('📄 '+esc(f.name)+' · '+fmtSize(f.size));
+    let ops;
+    if(rc){
+      // 回收站：可恢复 / 彻底删除
+      ops='<button class="wk-btn sm" data-a="restore">恢复</button>'+
+          '<button class="wk-btn danger sm" data-a="purge">彻底删除</button>';
+      if(!isDir) ops='<button class="wk-btn ghost sm" data-a="dl">下载</button>'+ops;
+    } else if(isDir){
+      ops='<button class="wk-btn danger sm" data-a="del">删除</button>';
     } else {
-      let ops='<button class="wk-btn ghost sm" data-a="edit">编辑</button>'+
-              '<button class="wk-btn ghost sm" data-a="dl">下载</button>'+
-              '<button class="wk-btn danger sm" data-a="del">删除</button>';
+      ops='<button class="wk-btn ghost sm" data-a="edit">编辑</button>'+
+          '<button class="wk-btn ghost sm" data-a="dl">下载</button>'+
+          '<button class="wk-btn danger sm" data-a="del">删除</button>';
       if(isZip) ops='<button class="wk-btn act sm" data-a="zip">解压</button>'+ops;
-      li.innerHTML='<div class="name">📄 '+esc(f.name)+' · '+fmtSize(f.size)+'</div>'+
-        '<div class="ops">'+ops+'</div>';
     }
+    li.innerHTML='<div style="display:flex;align-items:center;gap:10px;min-width:0">'+pick+'<div class="name">'+label+'</div></div>'+
+      '<div class="ops">'+ops+'</div>';
     li.dataset.type=f.type; li.dataset.path=f.path; li.dataset.name=f.name;
     list.appendChild(li);
   });
+  showFileBatchBar();
+}
+// ---------- 文件管理：多选 / 回收站 ----------
+function updateFileToolbar(){
+  const b=$('#recycleBtn'); if(b) b.textContent=isRecycleView()?'退出回收站':'回收站';
+  const rc=isRecycleView();
+  const toggle=(id,v)=>{ const el=$(id); if(el) el.classList.toggle('hidden',!v); };
+  toggle('#fileBatchRecycle',!rc);
+  toggle('#fileBatchRestore',rc);
+  toggle('#fileBatchPurge',rc);
+}
+function showFileBatchBar(){ const b=$('#fileBatchBar'); if(b) b.classList.remove('hidden'); updateFileBatchBar(); }
+function hideFileBatchBar(){ const b=$('#fileBatchBar'); if(b) b.classList.add('hidden'); }
+function updateFileBatchBar(){
+  const n=selectedFiles.size;
+  const c=$('#filePickCount'); if(c) c.textContent=n;
+  const all=$('#filePickAll');
+  if(all){ const boxes=$$('#fileList .filePick'); all.checked=boxes.length>0&&n===boxes.length; }
+}
+async function fileBatchOp(kind){
+  const paths=Array.from(selectedFiles);
+  if(!paths.length) return;
+  const conf={
+    recycle:'确认将所选 '+paths.length+' 项移入回收站？',
+    restore:'确认恢复所选 '+paths.length+' 项？',
+    purge:'确认彻底删除所选 '+paths.length+' 项？此操作不可恢复！'
+  }[kind];
+  if(!confirm(conf)) return;
+  const r=await api(API_BASE+'/files/'+kind,{method:'POST',body:JSON.stringify({paths:paths,branch:curBranch()})});
+  if(r.status===401){ redirectLogin(); return; }
+  const key={recycle:'moved',restore:'restored',purge:'purged'}[kind];
+  const label={recycle:'移入回收站',restore:'恢复',purge:'彻底删除'}[kind];
+  if(r.ok&&r.data&&r.data[key]>0) toast('已'+label+' '+r.data[key]+'/'+(r.data.total||paths.length)+' 项');
+  else toast(label+'失败：'+(r.data&&r.data.error||r.status),true);
+  selectedFiles.clear();
+  loadFiles();
 }
 async function onFileClick(e){
   const btn=e.target.closest('button'); if(!btn) return;
@@ -954,11 +1005,31 @@ async function onFileClick(e){
     return;
   }
   if(a==='del'){
-    if(!confirm('确认删除「'+name+'」？目录会递归删除。')) return;
-    const r=await api(fileApi(API_BASE+'/file?path='+encodeURIComponent(path)),{method:'DELETE'});
+    if(!confirm('确认删除「'+name+'」？将移入回收站，可恢复。')) return;
+    const r=await api(API_BASE+'/files/recycle',{method:'POST',body:JSON.stringify({paths:[path],branch:curBranch()})});
     if(r.status===401){ redirectLogin(); return; }
-    if(r.ok&&r.data&&r.data.ok) toast(r.data.message||'已删除');
-    else toast('删除失败：'+(r.data&&r.data.error||r.status),true);
+    const err=(r.data&&r.data.error)||(r.data&&r.data.results&&r.data.results[0]&&r.data.results[0].error);
+    if(r.ok&&r.data&&r.data.ok) toast('已移入回收站');
+    else toast('删除失败：'+(err||r.status),true);
+    loadFiles();
+    return;
+  }
+  if(a==='restore'){
+    const r=await api(API_BASE+'/files/restore',{method:'POST',body:JSON.stringify({paths:[path],branch:curBranch()})});
+    if(r.status===401){ redirectLogin(); return; }
+    const err=(r.data&&r.data.error)||(r.data&&r.data.results&&r.data.results[0]&&r.data.results[0].error);
+    if(r.ok&&r.data&&r.data.ok) toast('已恢复');
+    else toast('恢复失败：'+(err||r.status),true);
+    loadFiles();
+    return;
+  }
+  if(a==='purge'){
+    if(!confirm('确认彻底删除「'+name+'」？此操作不可恢复！')) return;
+    const r=await api(API_BASE+'/files/purge',{method:'POST',body:JSON.stringify({paths:[path],branch:curBranch()})});
+    if(r.status===401){ redirectLogin(); return; }
+    const err=(r.data&&r.data.error)||(r.data&&r.data.results&&r.data.results[0]&&r.data.results[0].error);
+    if(r.ok&&r.data&&r.data.ok) toast('已彻底删除');
+    else toast('彻底删除失败：'+(err||r.status),true);
     loadFiles();
     return;
   }
@@ -985,6 +1056,7 @@ async function onFileListClick(e){
   // 文件夹整行点击进入
   const li=e.target.closest('li'); if(!li||li.dataset.type!=='dir') return;
   if(e.target.closest('button')) return; // 点击按钮时交给 onFileClick
+  if(e.target.closest('input')) return;  // 点击复选框时不进入目录
   filePath=li.dataset.path;
   loadFiles();
 }
@@ -1131,6 +1203,27 @@ document.addEventListener('DOMContentLoaded', ()=>{
   $('#upDirBtn').onclick=upLevel;
   $('#branchSel').onchange=e=>{ fileBranch=e.target.value||'main'; filePath=''; loadFiles(); };
   $('#newFolderBtn').onclick=newFolder;
+  // 文件管理：多选 / 回收站
+  $('#recycleBtn').onclick=()=>{ filePath=isRecycleView()?'':RECYCLE_DIR; loadFiles(); };
+  $('#fileList').addEventListener('change',e=>{
+    const c=e.target;
+    if(!c||!c.classList||!c.classList.contains('filePick')) return;
+    const p=c.dataset.path;
+    if(c.checked) selectedFiles.add(p); else selectedFiles.delete(p);
+    updateFileBatchBar();
+  });
+  $('#filePickAll').onchange=e=>{
+    const on=e.target.checked;
+    $$('#fileList .filePick').forEach(c=>{
+      c.checked=on;
+      const p=c.dataset.path;
+      if(on) selectedFiles.add(p); else selectedFiles.delete(p);
+    });
+    updateFileBatchBar();
+  };
+  $('#fileBatchRecycle').onclick=()=>fileBatchOp('recycle');
+  $('#fileBatchRestore').onclick=()=>fileBatchOp('restore');
+  $('#fileBatchPurge').onclick=()=>fileBatchOp('purge');
   loadBranches(true);
   $$('.wk-tab').forEach(t=>t.onclick=()=>switchTab(t.dataset.tab));
 });
@@ -1259,10 +1352,20 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
           <button class="wk-btn ghost sm" id="upDirBtn" title="返回上一级">← 上一级</button>
           <button class="wk-btn sm" id="upBtn">上传</button>
           <button class="wk-btn ghost sm" id="newFolderBtn">新建文件夹</button>
+          <button class="wk-btn ghost sm" id="recycleBtn">回收站</button>
         </div>
         <input type="file" id="upInput" multiple style="display:none">
       </div>
       <div class="breadcrumb" id="fileCrumb" style="font-size:12px;color:var(--muted);padding:8px 6px 4px;word-break:break-all"></div>
+      <div class="filters hidden" id="fileBatchBar" style="margin:0 0 8px">
+        <label class="wk-label" style="display:flex;align-items:center;gap:6px;margin:0;cursor:pointer">
+          <input type="checkbox" id="filePickAll" style="width:auto"> 全选
+        </label>
+        <span class="wk-label" style="margin:0">已选 <b id="filePickCount">0</b> 项</span>
+        <button class="wk-btn danger sm" id="fileBatchRecycle">移入回收站</button>
+        <button class="wk-btn sm hidden" id="fileBatchRestore">恢复</button>
+        <button class="wk-btn danger sm hidden" id="fileBatchPurge">彻底删除</button>
+      </div>
       <ul class="wk-list" id="fileList"><li class="empty">加载中...</li></ul>
     </div>
     <!-- 全屏文本编辑器 -->
