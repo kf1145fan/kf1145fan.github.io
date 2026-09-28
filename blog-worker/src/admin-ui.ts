@@ -627,7 +627,7 @@ async function aiSend(){
       if(chunk.done) break;
       buf += dec.decode(chunk.value, { stream:true });
       let idx;
-      while((idx = buf.indexOf('\n')) >= 0){
+      while((idx = buf.indexOf('\\n')) >= 0){
         const line = buf.slice(0, idx).trim();
         buf = buf.slice(idx + 1);
         if(!line || line.indexOf('data:') !== 0) continue;
