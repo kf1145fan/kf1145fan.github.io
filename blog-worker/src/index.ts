@@ -446,6 +446,7 @@ interface AiConfig {
   apiKey: string; // API 密钥（读取接口不回传明文）
   model: string; // 默认模型
   enabled: boolean; // 是否启用
+  clientProxy: boolean; // 前端代理：由浏览器直连服务商（适用于屏蔽 Cloudflare IP 的接口）
 }
 
 const AI_DEFAULT_CONFIG: AiConfig = {
@@ -453,6 +454,7 @@ const AI_DEFAULT_CONFIG: AiConfig = {
   apiKey: "",
   model: "",
   enabled: false,
+  clientProxy: false,
 };
 
 const AI_CONFIG_KEY = "ai_config";
@@ -504,6 +506,7 @@ app.put("/admin/api/ai/settings", async (c) => {
         body.apiKey === undefined || body.apiKey === "" ? cur.apiKey : String(body.apiKey),
       model: body.model === undefined ? cur.model : String(body.model).trim(),
       enabled: body.enabled === undefined ? cur.enabled : !!body.enabled,
+      clientProxy: body.clientProxy === undefined ? cur.clientProxy : !!body.clientProxy,
     };
     await saveAiConfig(db, next);
     return json({ ok: true, ...next, apiKey: "", hasKey: !!next.apiKey });
@@ -564,17 +567,35 @@ app.post("/admin/api/ai/test", async (c) => {
   }
 });
 
-// GET 获取模型列表（管理员）：调用 {baseUrl}/models（OpenAI 兼容格式）
-app.get("/admin/api/ai/models", async (c) => {
+// GET 返回明文密钥（管理员）：仅用于「前端代理」模式下由浏览器直连服务商
+app.get("/admin/api/ai/key", async (c) => {
   if (!isAdmin(c.get("userInfo"))) return json({ error: "unauthorized" }, 401);
   try {
     const cfg = await getAiConfig((c.env as Bindings).DB);
-    if (!cfg.baseUrl) return json({ ok: false, error: "请先填写并保存 API 地址" }, 400);
-    const url = aiEndpoint(cfg.baseUrl, "/models");
+    return json({ ok: true, apiKey: cfg.apiKey });
+  } catch (e) {
+    return json({ ok: false, error: String(e) }, 500);
+  }
+});
+
+// 获取模型列表（管理员）：调用 {baseUrl}/models（OpenAI 兼容格式）
+// 支持通过参数覆盖 baseUrl / apiKey，因此「无需保存即可获取模型列表」
+async function aiModelsHandler(
+  c: any,
+  over: { baseUrl?: string; apiKey?: string }
+) {
+  try {
+    const cfg = await getAiConfig((c.env as Bindings).DB);
+    const baseUrl = String(over.baseUrl || cfg.baseUrl || "").trim();
+    const apiKey = over.apiKey !== undefined && over.apiKey !== null && over.apiKey !== ""
+      ? String(over.apiKey)
+      : cfg.apiKey;
+    if (!baseUrl) return json({ ok: false, error: "请先填写 API 地址" }, 400);
+    const url = aiEndpoint(baseUrl, "/models");
     const resp = await fetch(url, {
       headers: {
         Accept: "application/json",
-        ...(cfg.apiKey ? { Authorization: `Bearer ${cfg.apiKey}` } : {}),
+        ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
       },
     });
     const text = await resp.text();
@@ -584,7 +605,7 @@ app.get("/admin/api/ai/models", async (c) => {
     } catch (e) {}
     if (!resp.ok) {
       const detail =
-        data?.error?.message || data?.message || text.slice(0, 300) || `HTTP ${resp.status}`;
+        data?.error?.message || data?.error || data?.message || text.slice(0, 300) || `HTTP ${resp.status}`;
       return json({ ok: false, status: resp.status, error: String(detail) });
     }
     const list: any[] = Array.isArray(data?.data) ? data.data : Array.isArray(data) ? data : [];
@@ -595,6 +616,17 @@ app.get("/admin/api/ai/models", async (c) => {
   } catch (e) {
     return json({ ok: false, error: String(e) }, 500);
   }
+}
+
+app.get("/admin/api/ai/models", async (c) => {
+  if (!isAdmin(c.get("userInfo"))) return json({ error: "unauthorized" }, 401);
+  return aiModelsHandler(c, { baseUrl: c.req.query("baseUrl"), apiKey: c.req.query("apiKey") });
+});
+
+app.post("/admin/api/ai/models", async (c) => {
+  if (!isAdmin(c.get("userInfo"))) return json({ error: "unauthorized" }, 401);
+  const body = (await c.req.json().catch(() => ({}))) as { baseUrl?: string; apiKey?: string };
+  return aiModelsHandler(c, { baseUrl: body.baseUrl, apiKey: body.apiKey });
 });
 
 // ---------- 3.59 AI 助手（聊天：流式输出 + 历史记录）----------

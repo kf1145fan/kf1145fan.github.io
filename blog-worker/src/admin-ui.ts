@@ -172,6 +172,8 @@ a{color:var(--accent);text-decoration:none}
 .ai-msg.user .ai-body{background:var(--accent);color:#fff;border-color:var(--accent)}
 .ai-input{display:flex;gap:8px;align-items:flex-end;margin-top:10px}
 .ai-input textarea{flex:1;resize:vertical;min-height:56px}
+.ai-side-title{font-size:12px;color:var(--muted);margin:12px 0 6px}
+.ai-model-list{max-height:240px;overflow:auto;display:flex;flex-wrap:wrap;gap:6px;align-content:flex-start}
 @media(max-width:640px){.ai-chat{flex-direction:column;height:auto}.ai-side{width:auto;border-right:none;border-bottom:1px solid var(--border);padding:0 0 12px}.ai-messages{min-height:300px}}
 `;
 
@@ -414,8 +416,36 @@ async function saveSiteSettings(){
   }
 }
 
-// ---------- AI 设置（OpenAI 兼容接口：配置 / 测试 / 模型列表）----------
+// ---------- AI 设置（OpenAI 兼容接口：配置 / 测试 / 模型列表 / 前端代理）----------
 let aiModels = [];
+const aiVal = id => { const el=$('#'+id); return el ? el.value : ''; };
+// 拼接 OpenAI 兼容地址：结尾无 /vN 时自动补 /v1（与后端 aiEndpoint 逻辑一致）
+function aiJoin(base, path){
+  let b = String(base || '').trim();
+  while(b.slice(-1) === '/') b = b.slice(0, -1);
+  if(!b) return '';
+  const seg = b.split('/').pop() || '';
+  const c0 = seg.charAt(0), c1 = seg.charAt(1);
+  const isVer = c0 === 'v' && c1 >= '0' && c1 <= '9';
+  if(!isVer) b += '/v1';
+  return b + path;
+}
+// 前端直连所需的密钥：优先输入框，其次取已保存的
+async function resolveAiKey(formKey){
+  if(formKey) return formKey;
+  try{ const r = await api('/admin/api/ai/key'); if(r.ok && r.data && r.data.apiKey) return r.data.apiKey; }catch(e){}
+  return '';
+}
+function aiProxyOn(){ const el = $('#aiClientProxy'); return !!(el && el.checked); }
+// 聊天页是否启用前端代理（以聊天页复选框为准）
+function aiChatProxyOn(){ const el = $('#aiChatProxy'); return !!(el && el.checked); }
+// 前端直连所需的 API 地址：优先设置页输入框（支持未保存），其次后端已保存配置
+async function resolveAiBase(){
+  const v = aiVal('aiBaseUrl').trim();
+  if(v) return v;
+  try{ const r = await api('/admin/api/ai/settings'); if(r.ok && r.data && r.data.baseUrl) return r.data.baseUrl; }catch(e){}
+  return '';
+}
 async function loadAiSettings(){
   try{
     const r = await api('/admin/api/ai/settings');
@@ -424,19 +454,20 @@ async function loadAiSettings(){
       const bu = $('#aiBaseUrl'); if(bu) bu.value = d.baseUrl || '';
       const md = $('#aiModel'); if(md) md.value = d.model || '';
       const en = $('#aiEnabled'); if(en) en.checked = !!d.enabled;
+      const cp = $('#aiClientProxy'); if(cp) cp.checked = !!d.clientProxy;
       const k = $('#aiApiKey');
       if(k){ k.value = ''; k.placeholder = d.hasKey ? '已保存（留空表示不修改）' : '未设置'; }
     }
   }catch(e){}
 }
 async function saveAiSettings(){
-  const v = id => { const el=$('#'+id); return el ? el.value : ''; };
-  const ck = $('#aiEnabled');
+  const en = $('#aiEnabled');
   const payload = {
-    baseUrl: v('aiBaseUrl').trim(),
-    apiKey: v('aiApiKey'),
-    model: v('aiModel').trim(),
-    enabled: !!(ck && ck.checked)
+    baseUrl: aiVal('aiBaseUrl').trim(),
+    apiKey: aiVal('aiApiKey'),
+    model: aiVal('aiModel').trim(),
+    enabled: !!(en && en.checked),
+    clientProxy: aiProxyOn()
   };
   const r = await api('/admin/api/ai/settings', { method:'PUT', body: JSON.stringify(payload) });
   const msg = $('#aiMsg');
@@ -452,50 +483,90 @@ async function saveAiSettings(){
   }
 }
 async function testAiSettings(){
-  const v = id => { const el=$('#'+id); return el ? el.value : ''; };
   const msg = $('#aiMsg');
   if(msg){ msg.className='msg'; msg.textContent='测试中...'; }
   toast('测试中...');
-  const payload = { baseUrl: v('aiBaseUrl').trim(), apiKey: v('aiApiKey'), model: v('aiModel').trim() };
+  const base = aiVal('aiBaseUrl').trim();
+  const key = aiVal('aiApiKey');
+  const model = aiVal('aiModel').trim();
   try{
-    const r = await api('/admin/api/ai/test', { method:'POST', body: JSON.stringify(payload) });
-    const d = (r.data || {});
-    if(r.ok && d.ok){
-      const text = '连接成功，耗时 ' + (d.elapsed == null ? '-' : d.elapsed) + 'ms；模型「' + (d.model || '') + '」回复：' + (d.reply || '（空）');
-      toast('连接成功（' + (d.elapsed == null ? '-' : d.elapsed) + 'ms）');
+    let elapsed = null, reply = '', useModel = model, err = '';
+    if(aiProxyOn()){
+      // 前端代理：浏览器直连服务商（绕过 Cloudflare 出网限制）
+      const k = await resolveAiKey(key);
+      const t0 = Date.now();
+      const resp = await fetch(aiJoin(base, '/chat/completions'), {
+        method:'POST',
+        headers: Object.assign({'Content-Type':'application/json'}, k ? {Authorization:'Bearer ' + k} : {}),
+        body: JSON.stringify({ model: model, messages:[{role:'user', content:'你好，这是一条连通性测试消息，请回复一句话确认。'}], max_tokens:32 })
+      });
+      elapsed = Date.now() - t0;
+      const d = await resp.json().catch(()=>({}));
+      if(resp.ok){
+        useModel = d.model || model;
+        reply = (d.choices && d.choices[0] && d.choices[0].message && d.choices[0].message.content) || '';
+      } else {
+        err = (d.error && (d.error.message || d.error)) || ('HTTP ' + resp.status);
+      }
+    } else {
+      const r = await api('/admin/api/ai/test', { method:'POST', body: JSON.stringify({ baseUrl: base, apiKey: key, model: model }) });
+      const d = (r.data || {});
+      if(r.ok && d.ok){ elapsed = d.elapsed; useModel = d.model || model; reply = d.reply || ''; }
+      else err = d.error || '测试失败';
+    }
+    if(!err){
+      const text = '连接成功，耗时 ' + (elapsed == null ? '-' : elapsed) + 'ms；模型「' + useModel + '」回复：' + (reply || '（空）');
+      toast('连接成功（' + (elapsed == null ? '-' : elapsed) + 'ms）');
       if(msg){ msg.className='msg ok'; msg.textContent=text; }
     } else {
-      const err = d.error || '测试失败';
       toast('测试失败：' + err, true);
       if(msg){ msg.className='msg err'; msg.textContent='测试失败：' + err; }
     }
   }catch(e){
+    const hint = aiProxyOn() ? '（前端代理直连失败，可能是服务商未开放跨域/CORS，请改用后端或检查网络）' : '';
     toast('测试失败', true);
-    if(msg){ msg.className='msg err'; msg.textContent='测试失败：' + e; }
+    if(msg){ msg.className='msg err'; msg.textContent='测试失败：' + ((e && e.message) ? e.message : e) + hint; }
   }
 }
 async function loadAiModels(){
   const box = $('#aiModelList');
   const msg = $('#aiMsg');
   if(box) box.innerHTML = '<span class="wk-label" style="margin:0">加载中...</span>';
+  const base = aiVal('aiBaseUrl').trim();
+  const key = aiVal('aiApiKey');
   try{
-    const r = await api('/admin/api/ai/models');
-    const d = (r.data || {});
-    if(r.ok && d.ok){
-      aiModels = Array.isArray(d.models) ? d.models : [];
+    let models = null, err = '';
+    if(aiProxyOn()){
+      const k = await resolveAiKey(key);
+      const resp = await fetch(aiJoin(base, '/models'), { headers: Object.assign({Accept:'application/json'}, k ? {Authorization:'Bearer ' + k} : {}) });
+      const d = await resp.json().catch(()=>({}));
+      if(resp.ok){
+        const list = Array.isArray(d.data) ? d.data : (Array.isArray(d) ? d : []);
+        models = list.map(x => (typeof x === 'string' ? x : (x && x.id))).filter(Boolean);
+      } else {
+        err = (d.error && (d.error.message || d.error)) || ('HTTP ' + resp.status);
+      }
+    } else {
+      const r = await api('/admin/api/ai/models', { method:'POST', body: JSON.stringify({ baseUrl: base, apiKey: key }) });
+      const d = (r.data || {});
+      if(r.ok && d.ok) models = Array.isArray(d.models) ? d.models : [];
+      else err = d.error || '获取失败';
+    }
+    if(models){
+      aiModels = models;
       renderAiModels();
-      if(msg){ msg.className='msg ok'; msg.textContent='共获取到 ' + aiModels.length + ' 个模型，点击模型名可填入默认模型'; }
+      if(msg){ msg.className='msg ok'; msg.textContent='共获取到 ' + aiModels.length + ' 个模型，可搜索并点击填入默认模型'; }
     } else {
       aiModels = [];
-      if(box) box.innerHTML = '';
-      const err = d.error || '获取失败';
+      renderAiModels();
       if(msg){ msg.className='msg err'; msg.textContent='获取失败：' + err; }
       toast('获取模型失败：' + err, true);
     }
   }catch(e){
     aiModels = [];
-    if(box) box.innerHTML = '';
-    if(msg){ msg.className='msg err'; msg.textContent='获取失败：' + e; }
+    renderAiModels();
+    const hint = aiProxyOn() ? '（前端代理直连失败，可能是服务商未开放跨域/CORS）' : '';
+    if(msg){ msg.className='msg err'; msg.textContent='获取失败：' + ((e && e.message) ? e.message : e) + hint; }
     toast('获取模型失败', true);
   }
 }
@@ -503,12 +574,23 @@ function renderAiModels(){
   const box = $('#aiModelList');
   if(!box) return;
   if(!aiModels.length){ box.innerHTML = '<span class="wk-label" style="margin:0">未获取到模型</span>'; return; }
-  box.innerHTML = aiModels.map((m,i) => '<button type="button" class="wk-btn ghost sm" style="margin:0 6px 6px 0" onclick="pickAiModel(' + i + ')">' + esc(m) + '</button>').join('');
+  const qEl = $('#aiModelSearch');
+  const q = (qEl && qEl.value ? qEl.value : '').trim().toLowerCase();
+  const list = q ? aiModels.filter(m => String(m).toLowerCase().indexOf(q) >= 0) : aiModels;
+  if(!list.length){ box.innerHTML = '<span class="wk-label" style="margin:0">没有匹配「' + esc(q) + '」的模型</span>'; return; }
+  const cur = aiVal('aiModel').trim();
+  box.innerHTML = '<div class="wk-label" style="margin:0 0 6px;width:100%">共 ' + list.length + ' 个</div>' +
+    list.map(m => {
+      const i = aiModels.indexOf(m);
+      const cls = (cur === m) ? 'act' : 'ghost';
+      return '<button type="button" class="wk-btn ' + cls + ' sm" onclick="pickAiModel(' + i + ')">' + esc(m) + '</button>';
+    }).join('');
 }
 function pickAiModel(i){
   const m = aiModels[i];
   if(m == null) return;
   const el = $('#aiModel'); if(el) el.value = m;
+  renderAiModels();
   toast('已填入模型：' + m);
 }
 
@@ -519,14 +601,17 @@ let aiStreaming = false;      // 是否正在流式接收
 let aiAbort = null;           // 中止控制器
 
 async function loadAiChat(){
-  // 进入页面：加载历史会话列表 + 默认模型提示
+  // 进入页面：加载历史会话列表 + 默认模型 / 前端代理开关提示
   loadAiConversations();
   try{
     const r = await api('/admin/api/ai/settings');
+    const d = (r.ok && r.data) ? r.data : {};
     const m = $('#aiChatModel');
-    if(m && !m.value && r.ok && r.data) m.value = r.data.model || '';
+    if(m && !m.value) m.value = d.model || '';
+    const cp = $('#aiChatProxy');
+    if(cp && !cp.dataset.touched) cp.checked = !!d.clientProxy;
     const hint = $('#aiChatHint');
-    if(hint) hint.textContent = (r.ok && r.data && r.data.baseUrl) ? '' : '尚未配置 AI，请到「设置 → AI 设置」填写';
+    if(hint) hint.textContent = d.baseUrl ? '' : '尚未配置 AI，请到「设置 → AI 设置」填写';
   }catch(e){}
 }
 async function loadAiConversations(){
@@ -604,16 +689,31 @@ async function aiSend(){
   aiAbort = new AbortController();
 
   const modelEl = $('#aiChatModel');
+  const modelName = modelEl ? modelEl.value.trim() : '';
   let acc = '';
   try{
-    const headers = { 'Content-Type':'application/json' };
-    if(token) headers['Authorization'] = 'Bearer ' + token;
-    const resp = await fetch('/admin/api/ai/chat', {
-      method:'POST',
-      headers: headers,
-      signal: aiAbort.signal,
-      body: JSON.stringify({ messages: aiConvMessages, model: modelEl ? modelEl.value.trim() : '' })
-    });
+    let resp;
+    if(aiChatProxyOn()){
+      // 前端代理：浏览器直连服务商（绕过 Cloudflare 出网限制）
+      const base = await resolveAiBase();
+      if(!base) throw new Error('前端代理需要 API 地址，请到「设置 → AI 设置」填写');
+      const k = await resolveAiKey(aiVal('aiApiKey'));
+      resp = await fetch(aiJoin(base, '/chat/completions'), {
+        method:'POST',
+        headers: Object.assign({'Content-Type':'application/json'}, k ? {Authorization:'Bearer ' + k} : {}),
+        signal: aiAbort.signal,
+        body: JSON.stringify({ messages: aiConvMessages, model: modelName, stream: true })
+      });
+    } else {
+      const headers = { 'Content-Type':'application/json' };
+      if(token) headers['Authorization'] = 'Bearer ' + token;
+      resp = await fetch('/admin/api/ai/chat', {
+        method:'POST',
+        headers: headers,
+        signal: aiAbort.signal,
+        body: JSON.stringify({ messages: aiConvMessages, model: modelName })
+      });
+    }
     const ct = resp.headers.get('content-type') || '';
     if(!resp.ok || ct.indexOf('application/json') >= 0){
       const d = await resp.json().catch(()=>({}));
@@ -645,7 +745,8 @@ async function aiSend(){
       if(msg){ msg.className = 'msg'; msg.textContent = '已停止生成'; }
     } else {
       const err = (e && e.message) ? e.message : String(e);
-      if(msg){ msg.className = 'msg err'; msg.textContent = '请求失败：' + err; }
+      const hint = aiChatProxyOn() ? '（前端代理直连失败，可能是服务商未开放跨域/CORS，请改用后端或检查网络）' : '';
+      if(msg){ msg.className = 'msg err'; msg.textContent = '请求失败：' + err + hint; }
       toast('请求失败：' + err, true);
     }
   }finally{
@@ -1778,16 +1879,18 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
   <div id="page-ai" class="${pageCls("ai")}">
     <div class="wk-card ai-chat">
       <div class="ai-side">
-        <div class="filters" style="margin:0 0 8px">
-          <button class="wk-btn sm" onclick="aiNewChat()">＋ 新对话</button>
-          <button class="wk-btn ghost sm" onclick="loadAiConversations()">刷新</button>
-        </div>
+        <button class="wk-btn sm" style="width:100%" onclick="aiNewChat()">＋ 新建对话</button>
+        <div class="ai-side-title">历史对话</div>
         <div id="aiConvList" class="ai-conv-list"><div class="empty">加载中...</div></div>
       </div>
       <div class="ai-main">
         <div class="filters" style="margin:0 0 8px;align-items:center">
           <span class="wk-label" style="margin:0">模型</span>
-          <input class="wk-input" id="aiChatModel" style="width:220px" placeholder="使用默认模型">
+          <input class="wk-input" id="aiChatModel" style="width:200px" placeholder="使用默认模型">
+          <label class="wk-label" style="display:flex;align-items:center;gap:4px;margin:0;cursor:pointer" title="由浏览器直连服务商（部分服务商屏蔽 Cloudflare IP，后端访问不了时开启）">
+            <input type="checkbox" id="aiChatProxy" style="width:auto" onchange="this.dataset.touched='1'"> 前端代理
+          </label>
+          <button class="wk-btn ghost sm" onclick="loadAiConversations()">刷新</button>
           <span class="wk-label" id="aiChatHint" style="margin:0"></span>
           <div style="flex:1"></div>
           <button class="wk-btn ghost sm" id="aiStopBtn" style="display:none" onclick="aiStop()">停止</button>
@@ -1909,7 +2012,7 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
     <details class="wk-collapse">
       <summary>AI 设置</summary>
       <div class="wk-collapse-body">
-        <p class="wk-label" style="margin-top:0">配置一个 OpenAI 兼容的 AI 接口（Chat Completions 协议）。填入基础地址与密钥后，可测试连通性并一键获取该接口下的全部可用模型。</p>
+        <p class="wk-label" style="margin-top:0">配置一个 OpenAI 兼容的 AI 接口（Chat Completions 协议）。填入基础地址与密钥后，<b>无需保存即可直接测试连通性与获取模型列表</b>。</p>
         <label class="wk-label">API 地址（基础地址，带或不带结尾的 /v1 均可）</label>
         <input class="wk-input" id="aiBaseUrl" placeholder="https://api.openai.com/v1">
         <label class="wk-label" style="margin-top:12px">API 密钥</label>
@@ -1919,13 +2022,22 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
         <label class="wk-label" style="display:flex;align-items:center;gap:6px;margin-top:10px;cursor:pointer">
           <input type="checkbox" id="aiEnabled" style="width:auto"> 启用 AI 设置
         </label>
+        <label class="wk-label" style="display:flex;align-items:center;gap:6px;margin-top:6px;cursor:pointer">
+          <input type="checkbox" id="aiClientProxy" style="width:auto"> 前端代理：由浏览器直连服务商（部分服务商屏蔽 Cloudflare IP，后端访问不了时开启）
+        </label>
         <div class="filters" style="margin:14px 0 0">
           <button class="wk-btn sm" onclick="saveAiSettings()">保存配置</button>
-          <button class="wk-btn ghost sm" onclick="testAiSettings()">测试连通性</button>
-          <button class="wk-btn ghost sm" onclick="loadAiModels()">获取模型列表</button>
+          <button class="wk-btn ghost sm" onclick="testAiSettings()">测试连通性（无需保存）</button>
+          <button class="wk-btn ghost sm" onclick="loadAiModels()">获取模型列表（无需保存）</button>
         </div>
         <div class="msg" id="aiMsg"></div>
-        <div id="aiModelList" style="margin-top:10px"></div>
+        <details class="wk-collapse" style="margin-top:12px;background:transparent;border:1px solid var(--border)">
+          <summary>模型列表</summary>
+          <div class="wk-collapse-body" style="border-top:1px solid var(--border)">
+            <input class="wk-input" id="aiModelSearch" placeholder="搜索模型，如 free / gpt / claude" oninput="renderAiModels()">
+            <div id="aiModelList" class="ai-model-list" style="margin-top:8px"></div>
+          </div>
+        </details>
       </div>
     </details>
 
