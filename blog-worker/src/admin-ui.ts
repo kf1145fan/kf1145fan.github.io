@@ -155,10 +155,9 @@ a{color:var(--accent);text-decoration:none}
 @media(prefers-color-scheme:dark){.wk-badge.success{color:#4ade80;background:rgba(74,222,128,.12)}.wk-badge.fail{color:#f87171;background:rgba(248,113,113,.12)}.wk-badge.running{color:#fbbf24;background:rgba(251,191,36,.12)}}
 
 /* AI 助手（聊天）：扁平风格，方形直角，贴合后台原有样式 */
-.ai-chat{display:flex;gap:0;padding:0;height:calc(100vh - 190px);min-height:420px;overflow:hidden}
-.ai-side{width:216px;flex-shrink:0;display:flex;flex-direction:column;min-width:0;padding:12px;background:var(--hover)}
-.ai-rail{flex:none;width:16px;align-self:stretch;border:0;border-right:1px solid var(--border);background:var(--hover);color:var(--muted);cursor:pointer;font-size:12px;padding:0;line-height:1}
-.ai-rail:hover{color:var(--accent);background:var(--card)}
+.ai-chat{position:relative;display:flex;gap:0;padding:0;height:calc(100vh - 190px);min-height:420px;overflow:hidden}
+.ai-side{width:216px;flex-shrink:0;display:flex;flex-direction:column;min-width:0;border-right:1px solid var(--border);padding:12px;background:var(--hover)}
+.ai-side-head{display:flex;align-items:center;gap:6px;margin-bottom:4px}
 .ai-side-title{font-size:11px;color:var(--muted);margin:14px 0 6px;letter-spacing:.06em}
 .ai-conv-list{flex:1;overflow:auto;display:flex;flex-direction:column;gap:2px;margin:0 -6px;padding:0 6px}
 .ai-conv{display:flex;align-items:center;gap:6px;padding:6px 8px;border:1px solid transparent;border-left:2px solid transparent;border-radius:2px;cursor:pointer;font-size:13px;color:var(--fg)}
@@ -186,7 +185,7 @@ a{color:var(--accent);text-decoration:none}
 .ai-pick input{width:auto;margin:0}
 .ai-pick-n{max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ai-chat.side-off .ai-side{display:none}
-@media(max-width:640px){.ai-chat{flex-direction:column;height:auto}.ai-side{width:auto;border-bottom:1px solid var(--border)}.ai-rail{width:auto;height:20px;border-right:none;border-bottom:1px solid var(--border)}.ai-scroll{min-height:300px}}
+@media(max-width:640px){.ai-chat{height:auto}.ai-side{position:absolute;top:0;left:0;bottom:0;width:min(78vw,260px);z-index:6}.ai-scroll{min-height:300px}}
 `;
 
 const SCRIPT = `
@@ -450,8 +449,8 @@ async function resolveAiKey(formKey){
   return '';
 }
 function aiProxyOn(){ const el = $('#aiClientProxy'); return !!(el && el.checked); }
-// 聊天页是否启用前端代理（以聊天页复选框为准）
-function aiChatProxyOn(){ const el = $('#aiChatProxy'); return !!(el && el.checked); }
+// 聊天页是否启用前端代理（跟随设置中已保存的配置）
+function aiChatProxyOn(){ return !!aiChatProxy; }
 // 前端直连所需的 API 地址：优先设置页输入框（支持未保存），其次后端已保存配置
 async function resolveAiBase(){
   const v = aiVal('aiBaseUrl').trim();
@@ -629,13 +628,16 @@ let aiConvId = null;          // 当前会话 id（null 表示新对话，首次
 let aiConvMessages = [];      // [{role, content}]
 let aiStreaming = false;      // 是否正在流式接收
 let aiAbort = null;           // 中止控制器
+let aiChatProxy = false;      // 前端代理（取自设置中已保存的配置）
 
 async function loadAiChat(){
-  // 进入页面：加载历史会话列表 + 模型下拉（可选模型）+ 前端代理开关提示
+  // 进入页面：加载历史会话列表 + 模型下拉（可选模型）
   loadAiConversations();
+  aiInitSide();
   try{
     const r = await api('/admin/api/ai/settings');
     const d = (r.ok && r.data) ? r.data : {};
+    aiChatProxy = !!d.clientProxy;
     const sel = $('#aiChatModel');
     if(sel){
       const list = (Array.isArray(d.models) && d.models.length) ? d.models : (d.model ? [d.model] : []);
@@ -649,25 +651,31 @@ async function loadAiChat(){
         if(d.model && list.indexOf(d.model) >= 0) sel.value = d.model;
       }
     }
-    const cp = $('#aiChatProxy');
-    if(cp && !cp.dataset.touched) cp.checked = !!d.clientProxy;
     aiUpdateHint();
   }catch(e){}
 }
-// 收起 / 展开会话侧边栏（把手在侧边，收起后仍可从左侧展开）
-function aiToggleSide(){
-  const el = document.querySelector('.ai-chat');
-  if(!el) return;
-  const off = el.classList.toggle('side-off');
-  const r = $('#aiRail');
-  if(r){ r.textContent = off ? '›' : '‹'; r.title = off ? '展开侧边栏' : '收起侧边栏'; }
+// 收起 / 展开会话侧边栏（手机端默认收起，从侧面滑出；选择会被记住）
+function aiSetSide(off){
+  const el = document.querySelector('.ai-chat'); if(!el) return;
+  el.classList.toggle('side-off', off);
+  const btn = $('#aiSideToggle'); if(btn) btn.style.display = off ? '' : 'none';
 }
-// 顶栏提示：显示当前实际请求目标（前端代理时给出直连地址），便于排查
+function aiToggleSide(){
+  const el = document.querySelector('.ai-chat'); if(!el) return;
+  const off = !el.classList.contains('side-off');
+  aiSetSide(off);
+  try{ localStorage.setItem('aiSideOff', off ? '1' : '0'); }catch(e){}
+}
+function aiInitSide(){
+  let pref = null;
+  try{ pref = localStorage.getItem('aiSideOff'); }catch(e){}
+  aiSetSide(pref === null ? window.innerWidth <= 640 : pref === '1');
+}
+// 顶栏提示：未配置时给出引导
 async function aiUpdateHint(){
   const hint = $('#aiChatHint'); if(!hint) return;
   const base = await resolveAiBase();
-  if(!base){ hint.textContent = '尚未配置 AI，请到「设置 → AI 设置」填写'; return; }
-  hint.textContent = aiChatProxyOn() ? ('前端代理 → ' + aiJoin(base, '/chat/completions')) : '';
+  hint.textContent = base ? '' : '尚未配置 AI，请到「设置 → AI 设置」填写';
 }
 async function loadAiConversations(){
   const box = $('#aiConvList'); if(!box) return;
@@ -803,7 +811,7 @@ async function aiSend(){
       if(msg){ msg.className = 'msg'; msg.textContent = '已停止生成'; }
     } else {
       const err = (e && e.message) ? e.message : String(e);
-      const hint = aiChatProxyOn() ? '（前端代理直连 ' + target + ' 失败：若提示 Failed to fetch，说明该服务商未开放跨域 CORS，请改用后端模式或换支持 CORS 的服务商）' : '';
+      const hint = aiChatProxyOn() ? '（前端代理请求失败：服务商可能不允许跨域）' : '';
       if(msg){ msg.className = 'msg err'; msg.textContent = '请求失败：' + err + hint; }
       toast('请求失败：' + err, true);
     }
@@ -1937,17 +1945,22 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
   <div id="page-ai" class="${pageCls("ai")}">
     <div class="wk-card ai-chat">
       <div class="ai-side">
-        <button class="wk-btn sm" style="width:100%" onclick="aiNewChat()">＋ 新建对话</button>
+        <div class="ai-side-head">
+          <button class="wk-btn ghost sm" onclick="aiToggleSide()" title="收起侧边栏">‹</button>
+          <span class="wk-label" style="margin:0">会话</span>
+          <div style="flex:1"></div>
+          <button class="wk-btn ghost sm" onclick="loadAiConversations()" title="刷新">刷新</button>
+        </div>
+        <button class="wk-btn sm" style="width:100%;margin-top:6px" onclick="aiNewChat()">＋ 新建对话</button>
         <div class="ai-side-title">历史对话</div>
         <div id="aiConvList" class="ai-conv-list"><div class="empty">加载中...</div></div>
       </div>
-      <button class="ai-rail" id="aiRail" onclick="aiToggleSide()" title="收起侧边栏">‹</button>
       <div class="ai-main">
         <div class="ai-bar">
+          <button class="wk-btn ghost sm" id="aiSideToggle" onclick="aiToggleSide()" title="展开侧边栏" style="display:none">› 会话</button>
           <div style="flex:1"></div>
           <span class="wk-label" id="aiChatHint" style="margin:0"></span>
           <button class="wk-btn ghost sm" id="aiStopBtn" style="display:none" onclick="aiStop()">停止</button>
-          <button class="wk-btn ghost sm" onclick="loadAiConversations()">刷新</button>
         </div>
         <div id="aiMessages" class="ai-scroll"><div class="ai-col" id="aiCol"><div class="empty">开始和 AI 对话吧</div></div></div>
         <div class="ai-input">
@@ -1957,9 +1970,6 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
         <div class="ai-foot">
           <span class="wk-label" style="margin:0">模型</span>
           <select class="wk-input" id="aiChatModel" style="width:auto;min-width:170px;max-width:260px;padding:4px 8px"></select>
-          <label class="wk-label" style="display:flex;align-items:center;gap:4px;margin:0;cursor:pointer">
-            <input type="checkbox" id="aiChatProxy" style="width:auto" onchange="this.dataset.touched='1';aiUpdateHint()"> 前端代理
-          </label>
         </div>
         <div class="msg" id="aiChatMsg" style="margin:0 14px 12px"></div>
       </div>
