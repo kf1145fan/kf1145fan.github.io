@@ -476,11 +476,19 @@ async function loadAiSettings(){
 }
 async function saveAiSettings(){
   const en = $('#aiEnabled');
+  const picked = aiPicked.slice();
+  let md = aiVal('aiModel').trim();
+  // 未手填默认模型时，取第一个已选模型；默认模型同时纳入可选列表，保证助手里能切换
+  if(!md && picked.length) md = picked[0];
+  if(md && picked.indexOf(md) < 0) picked.push(md);
+  const mdEl = $('#aiModel'); if(mdEl) mdEl.value = md;
+  aiPicked = picked;
+  renderAiModels();
   const payload = {
     baseUrl: aiVal('aiBaseUrl').trim(),
     apiKey: aiVal('aiApiKey'),
-    model: aiVal('aiModel').trim(),
-    models: aiPicked,
+    model: md,
+    models: picked,
     enabled: !!(en && en.checked),
     clientProxy: aiProxyOn()
   };
@@ -590,7 +598,11 @@ function renderAiModels(){
   const cnt = $('#aiPickedCount');
   if(cnt) cnt.textContent = aiPicked.length ? ('已选 ' + aiPicked.length + ' 个模型') : '尚未选择模型';
   if(!box) return;
-  if(!aiModels.length){ box.innerHTML = '<span class="wk-label" style="margin:0">未获取到模型，请先点「获取模型列表」</span>'; return; }
+  // 未重新拉取列表时，已保存的可选模型也要显示出来（避免看起来像没保存）
+  if(!aiModels.length){
+    if(!aiPicked.length){ box.innerHTML = '<span class="wk-label" style="margin:0">未获取到模型，请先点「获取模型列表」</span>'; return; }
+    aiModels = aiPicked.slice();
+  }
   const qEl = $('#aiModelSearch');
   const q = (qEl && qEl.value ? qEl.value : '').trim().toLowerCase();
   const list = q ? aiModels.filter(m => String(m).toLowerCase().indexOf(q) >= 0) : aiModels;
@@ -606,7 +618,16 @@ function renderAiModels(){
 }
 function toggleAiModel(m){
   const i = aiPicked.indexOf(m);
-  if(i >= 0) aiPicked.splice(i, 1); else aiPicked.push(m);
+  const md = $('#aiModel');
+  if(i >= 0){
+    aiPicked.splice(i, 1);
+    // 取消的正好是默认模型时，顺延到其它已选模型
+    if(md && md.value.trim() === m) md.value = aiPicked[0] || '';
+  } else {
+    aiPicked.push(m);
+    // 选中即填入默认模型，无需再手动输入
+    if(md) md.value = m;
+  }
   renderAiModels();
 }
 function aiPickVisible(){
@@ -615,11 +636,15 @@ function aiPickVisible(){
   return q ? aiModels.filter(m => String(m).toLowerCase().indexOf(q) >= 0) : aiModels.slice();
 }
 function aiPickAll(){
-  aiPickVisible().forEach(m => { if(aiPicked.indexOf(m) < 0) aiPicked.push(m); });
+  const vis = aiPickVisible();
+  vis.forEach(m => { if(aiPicked.indexOf(m) < 0) aiPicked.push(m); });
+  const md = $('#aiModel');
+  if(md && !md.value.trim() && vis.length) md.value = vis[0];
   renderAiModels();
 }
 function aiPickNone(){
   aiPicked = [];
+  const md = $('#aiModel'); if(md) md.value = '';
   renderAiModels();
 }
 
@@ -2088,7 +2113,7 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
         <input class="wk-input" id="aiBaseUrl" placeholder="https://api.openai.com/v1">
         <label class="wk-label" style="margin-top:12px">API 密钥</label>
         <input class="wk-input" id="aiApiKey" type="password" placeholder="留空表示不修改">
-        <label class="wk-label" style="margin-top:12px">默认模型</label>
+        <label class="wk-label" style="margin-top:12px">默认模型（在下方勾选可选模型会自动填入，也可手动输入）</label>
         <input class="wk-input" id="aiModel" placeholder="gpt-3.5-turbo">
         <label class="wk-label" style="display:flex;align-items:center;gap:6px;margin-top:10px;cursor:pointer">
           <input type="checkbox" id="aiEnabled" style="width:auto"> 启用 AI 设置
