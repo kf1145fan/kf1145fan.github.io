@@ -445,14 +445,16 @@ interface AiConfig {
   baseUrl: string; // API 基础地址，如 https://api.openai.com/v1
   apiKey: string; // API 密钥（读取接口不回传明文）
   model: string; // 默认模型
+  models: string[]; // 可选模型列表（AI 助手中可切换）
   enabled: boolean; // 是否启用
-  clientProxy: boolean; // 前端代理：由浏览器直连服务商（适用于屏蔽 Cloudflare IP 的接口）
+  clientProxy: boolean; // 前端代理：由浏览器直连服务商
 }
 
 const AI_DEFAULT_CONFIG: AiConfig = {
   baseUrl: "",
   apiKey: "",
   model: "",
+  models: [],
   enabled: false,
   clientProxy: false,
 };
@@ -505,6 +507,9 @@ app.put("/admin/api/ai/settings", async (c) => {
       apiKey:
         body.apiKey === undefined || body.apiKey === "" ? cur.apiKey : String(body.apiKey),
       model: body.model === undefined ? cur.model : String(body.model).trim(),
+      models: Array.isArray(body.models)
+        ? body.models.map((m) => String(m)).filter(Boolean)
+        : cur.models,
       enabled: body.enabled === undefined ? cur.enabled : !!body.enabled,
       clientProxy: body.clientProxy === undefined ? cur.clientProxy : !!body.clientProxy,
     };
