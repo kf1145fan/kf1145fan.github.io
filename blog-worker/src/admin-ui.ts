@@ -156,7 +156,9 @@ a{color:var(--accent);text-decoration:none}
 
 /* AI 助手（聊天）：扁平风格，方形直角，贴合后台原有样式 */
 .ai-chat{display:flex;gap:0;padding:0;height:calc(100vh - 190px);min-height:420px;overflow:hidden}
-.ai-side{width:216px;flex-shrink:0;display:flex;flex-direction:column;min-width:0;border-right:1px solid var(--border);padding:12px;background:var(--hover)}
+.ai-side{width:216px;flex-shrink:0;display:flex;flex-direction:column;min-width:0;padding:12px;background:var(--hover)}
+.ai-rail{flex:none;width:16px;align-self:stretch;border:0;border-right:1px solid var(--border);background:var(--hover);color:var(--muted);cursor:pointer;font-size:12px;padding:0;line-height:1}
+.ai-rail:hover{color:var(--accent);background:var(--card)}
 .ai-side-title{font-size:11px;color:var(--muted);margin:14px 0 6px;letter-spacing:.06em}
 .ai-conv-list{flex:1;overflow:auto;display:flex;flex-direction:column;gap:2px;margin:0 -6px;padding:0 6px}
 .ai-conv{display:flex;align-items:center;gap:6px;padding:6px 8px;border:1px solid transparent;border-left:2px solid transparent;border-radius:2px;cursor:pointer;font-size:13px;color:var(--fg)}
@@ -184,7 +186,7 @@ a{color:var(--accent);text-decoration:none}
 .ai-pick input{width:auto;margin:0}
 .ai-pick-n{max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ai-chat.side-off .ai-side{display:none}
-@media(max-width:640px){.ai-chat{flex-direction:column;height:auto}.ai-side{width:auto;border-right:none;border-bottom:1px solid var(--border)}.ai-scroll{min-height:300px}}
+@media(max-width:640px){.ai-chat{flex-direction:column;height:auto}.ai-side{width:auto;border-bottom:1px solid var(--border)}.ai-rail{width:auto;height:20px;border-right:none;border-bottom:1px solid var(--border)}.ai-scroll{min-height:300px}}
 `;
 
 const SCRIPT = `
@@ -652,10 +654,13 @@ async function loadAiChat(){
     aiUpdateHint();
   }catch(e){}
 }
-// 收起 / 展开会话侧边栏
+// 收起 / 展开会话侧边栏（把手在侧边，收起后仍可从左侧展开）
 function aiToggleSide(){
   const el = document.querySelector('.ai-chat');
-  if(el) el.classList.toggle('side-off');
+  if(!el) return;
+  const off = el.classList.toggle('side-off');
+  const r = $('#aiRail');
+  if(r){ r.textContent = off ? '›' : '‹'; r.title = off ? '展开侧边栏' : '收起侧边栏'; }
 }
 // 顶栏提示：显示当前实际请求目标（前端代理时给出直连地址），便于排查
 async function aiUpdateHint(){
@@ -1936,9 +1941,9 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
         <div class="ai-side-title">历史对话</div>
         <div id="aiConvList" class="ai-conv-list"><div class="empty">加载中...</div></div>
       </div>
+      <button class="ai-rail" id="aiRail" onclick="aiToggleSide()" title="收起侧边栏">‹</button>
       <div class="ai-main">
         <div class="ai-bar">
-          <button class="wk-btn ghost sm" id="aiSideToggle" onclick="aiToggleSide()" title="收起 / 展开侧边栏">☰ 会话</button>
           <div style="flex:1"></div>
           <span class="wk-label" id="aiChatHint" style="margin:0"></span>
           <button class="wk-btn ghost sm" id="aiStopBtn" style="display:none" onclick="aiStop()">停止</button>
