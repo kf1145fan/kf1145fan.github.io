@@ -156,7 +156,7 @@ a{color:var(--accent);text-decoration:none}
 
 /* AI 助手（聊天）：扁平风格，方形直角，贴合后台原有样式 */
 .ai-chat{position:relative;display:flex;gap:0;padding:0;height:calc(100vh - 190px);min-height:420px;overflow:hidden}
-.ai-side{width:216px;flex-shrink:0;display:flex;flex-direction:column;min-width:0;border-right:1px solid var(--border);padding:12px;background:var(--hover)}
+.ai-side{width:216px;flex-shrink:0;display:flex;flex-direction:column;min-width:0;border-right:1px solid var(--border);padding:12px;background:var(--hover);overflow:hidden;transition:width .26s ease,padding .26s ease,border-right-width .26s ease}
 .ai-side-head{display:flex;align-items:center;gap:6px;margin-bottom:4px}
 .ai-side-title{font-size:11px;color:var(--muted);margin:14px 0 6px;letter-spacing:.06em}
 .ai-conv-list{flex:1;overflow:auto;display:flex;flex-direction:column;gap:2px;margin:0 -6px;padding:0 6px}
@@ -184,8 +184,9 @@ a{color:var(--accent);text-decoration:none}
 .ai-pick.on{border-color:var(--accent);color:var(--accent)}
 .ai-pick input{width:auto;margin:0}
 .ai-pick-n{max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.ai-chat.side-off .ai-side{display:none}
+.ai-chat.side-off .ai-side{width:0;padding-left:0;padding-right:0;border-right-width:0}
 .ai-chat-title{font-size:14px;font-weight:600;max-width:46%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:text}
+.ai-icon-btn{display:inline-flex;align-items:center;justify-content:center;padding:4px 6px;line-height:0}
 .ai-recall{margin-left:8px;border:none;background:transparent;color:var(--muted);font-size:11px;cursor:pointer;padding:0}
 .ai-recall:hover{color:var(--accent);text-decoration:underline}
 .ai-tool-note{font-size:12px;color:var(--muted);border-left:2px solid var(--border);padding:4px 10px;margin:0;word-break:break-all;background:var(--hover)}
@@ -196,7 +197,7 @@ a{color:var(--accent);text-decoration:none}
 .ai-tool-confirm{border:1px solid var(--accent);border-radius:2px;padding:10px 12px;background:var(--card)}
 .ai-tool-head{font-size:13px;font-weight:600;margin-bottom:6px}
 .ai-tool-pre{margin:0;max-height:200px;overflow:auto;font-size:12px;white-space:pre-wrap;word-break:break-all;background:var(--hover);padding:8px;border-radius:2px}
-@media(max-width:640px){.ai-chat{height:auto}.ai-side{position:absolute;top:0;left:0;bottom:0;width:min(78vw,260px);z-index:6}.ai-scroll{min-height:300px}}
+@media(max-width:640px){.ai-chat{height:auto}.ai-side{position:absolute;top:0;left:0;bottom:0;width:min(78vw,260px);z-index:6;transition:transform .26s ease}.ai-chat.side-off .ai-side{width:min(78vw,260px);padding:12px;border-right-width:1px;transform:translateX(-100%)}.ai-scroll{min-height:300px}}
 `;
 
 const SCRIPT = `
@@ -686,6 +687,7 @@ async function loadAiChat(){
     aiChatProxy = !!d.clientProxy;
     aiPrompt = String(d.prompt || '').trim();
     aiPermission = d.permission || 'safe';
+    const pm = $('#aiChatPermission'); if(pm) pm.value = aiPermission;
     const sel = $('#aiChatModel');
     if(sel){
       const list = (Array.isArray(d.models) && d.models.length) ? d.models : (d.model ? [d.model] : []);
@@ -734,15 +736,18 @@ function aiInitSide(){
   try{ pref = localStorage.getItem('aiSideOff'); }catch(e){}
   aiSetSide(pref === null ? window.innerWidth <= 640 : pref === '1');
 }
-// 顶栏提示：未配置时给出引导
+// 顶栏提示：仅在未配置 AI 时给出引导（权限在输入框下方选择）
 async function aiUpdateHint(){
   const hint = $('#aiChatHint'); if(!hint) return;
   const base = await resolveAiBase();
-  if(!base){ hint.textContent = '尚未配置 AI，请到「设置 → AI 设置」填写'; return; }
-  hint.textContent = '权限：' + aiPermissionLabel(aiPermission) + (aiPermission === 'safe' ? '（仅对话）' : '');
+  hint.textContent = base ? '' : '尚未配置 AI，请到「设置 → AI 设置」填写';
 }
-function aiPermissionLabel(p){
-  return p==='full' ? '完全访问' : p==='important' ? '重要确认' : p==='all' ? '全部确认' : '安全访问';
+// 切换权限级别：生效并同步保存到设置
+async function aiSetPermission(v){
+  aiPermission = v || 'safe';
+  const sel = $('#aiChatPermission'); if(sel && sel.value !== aiPermission) sel.value = aiPermission;
+  aiLoadTools();
+  try{ await api('/admin/api/ai/settings', { method:'PUT', body: JSON.stringify({ permission: aiPermission }) }); }catch(e){}
 }
 async function loadAiConversations(){
   const box = $('#aiConvList'); if(!box) return;
@@ -2207,7 +2212,9 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
         <div class="ai-bar">
           <button class="wk-btn ghost sm" id="aiSideToggle" onclick="aiToggleSide()" title="展开侧边栏" style="display:none">› 会话</button>
           <span class="ai-chat-title" id="aiChatTitle" title="双击可重命名" ondblclick="aiRenameConv()">新对话</span>
-          <button class="wk-btn ghost sm" onclick="aiRenameConv()" title="重命名对话">改名</button>
+          <button class="wk-btn ghost sm ai-icon-btn" onclick="aiRenameConv()" title="重命名对话" aria-label="重命名对话">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+          </button>
           <div style="flex:1"></div>
           <span class="wk-label" id="aiChatHint" style="margin:0"></span>
           <button class="wk-btn ghost sm" id="aiStopBtn" style="display:none" onclick="aiStop()">停止</button>
@@ -2217,6 +2224,13 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
         <div class="ai-foot">
           <span class="wk-label" style="margin:0">模型</span>
           <select class="wk-input" id="aiChatModel" style="width:auto;min-width:170px;max-width:260px;padding:4px 8px"></select>
+          <span class="wk-label" style="margin:0">权限</span>
+          <select class="wk-input" id="aiChatPermission" onchange="aiSetPermission(this.value)" style="width:auto;min-width:200px;max-width:300px;padding:4px 8px">
+            <option value="safe">安全访问 · 仅对话</option>
+            <option value="important">重要确认 · 危险操作确认</option>
+            <option value="all">全部确认 · 每步都确认</option>
+            <option value="full">完全访问 · 无需确认</option>
+          </select>
         </div>
         <div class="ai-input">
           <textarea class="wk-input" id="aiInput" rows="3" placeholder="输入文字"></textarea>
