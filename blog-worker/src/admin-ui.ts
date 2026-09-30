@@ -159,6 +159,7 @@ a{color:var(--accent);text-decoration:none}
 /* AI 助手（聊天）：扁平风格，方形直角，贴合后台原有样式 */
 .ai-chat{position:relative;display:flex;gap:0;padding:0;height:calc(100vh - 128px);min-height:420px;overflow:hidden}
 .ai-chat.ai-full{position:fixed;inset:0;width:100vw;height:100vh;min-height:0;margin:0;z-index:200;border:none;border-radius:0}
+.ai-chat.ai-full .ai-col{max-width:none;padding-left:32px;padding-right:32px}
 .ai-side{width:216px;flex-shrink:0;display:flex;flex-direction:column;min-width:0;border-right:1px solid var(--border);padding:12px;background:var(--hover);overflow:hidden;transition:width .26s ease,padding .26s ease,border-right-width .26s ease}
 .ai-side-head{display:flex;align-items:center;gap:6px;margin-bottom:4px}
 .ai-side-title{font-size:11px;color:var(--muted);margin:14px 0 6px;letter-spacing:.06em}
