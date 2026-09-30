@@ -950,12 +950,22 @@ const AI_TOOLS = [
   { type: "function", function: { name: "delete_file", description: "删除仓库中的文件或目录（移入回收站，可恢复）", parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } } },
   { type: "function", function: { name: "build_status", description: "查询最近的部署构建状态", parameters: { type: "object", properties: {} } } },
   { type: "function", function: { name: "trigger_build", description: "手动触发一次部署构建", parameters: { type: "object", properties: {} } } },
-  { type: "function", function: { name: "get_settings", description: "读取站点设置", parameters: { type: "object", properties: {} } } },
-  { type: "function", function: { name: "set_setting", description: "修改站点设置，key 仅支持 allow_guest_comment / retention_days", parameters: { type: "object", properties: { key: { type: "string" }, value: { type: "string" } }, required: ["key", "value"] } } },
+  { type: "function", function: { name: "get_settings", description: "读取站点设置（站点功能 + 邮件服务器 + 订阅设置/邮件模板，密码以是否已设置表示）", parameters: { type: "object", properties: {} } } },
+  { type: "function", function: { name: "set_setting", description: "修改站点设置。key 支持：站点功能 allow_guest_comment / retention_days；邮件服务器 smtp_host / smtp_port / smtp_user / smtp_pass / smtp_from_name / smtp_from_email；订阅设置 sub_site_name / sub_site_url / sub_need_confirm / sub_daily_limit；订阅邮件模板 sub_subject / sub_body / sub_notify_subject / sub_notify_body / sub_unsub_subject / sub_unsub_body。", parameters: { type: "object", properties: { key: { type: "string" }, value: { type: "string" } }, required: ["key", "value"] } } },
+  { type: "function", function: { name: "save_secret", description: "当用户在对话中直接给出了密钥/授权码/密码并要你保存时调用。name 为占位符名称（如 SMTP_PASS），value 为用户给出的真实值；保存后在写入文件或设置时用 {name} 引用。", parameters: { type: "object", properties: { name: { type: "string" }, value: { type: "string" } }, required: ["name", "value"] } } },
+  { type: "function", function: { name: "request_secret", description: "当需要用户提供密钥/授权码/密码，但用户尚未在对话中提供时调用：系统会弹窗让用户在本地输入，输入内容不会发送给你，你只会收到是否设置成功的结果。切勿要求用户把密码直接发到对话里。", parameters: { type: "object", properties: { name: { type: "string", description: "占位符名称，如 SMTP_PASS" }, purpose: { type: "string", description: "用途说明，会展示给用户" } }, required: ["name"] } } },
+];
+
+// set_setting 允许修改的设置项（站点功能走 wl_Settings，其余写入订阅/SMTP 配置）
+const AI_SETTING_KEYS = [
+  "allow_guest_comment", "retention_days",
+  "smtp_host", "smtp_port", "smtp_user", "smtp_pass", "smtp_from_name", "smtp_from_email",
+  "sub_site_name", "sub_site_url", "sub_subject", "sub_body", "sub_notify_subject", "sub_notify_body",
+  "sub_unsub_subject", "sub_unsub_body", "sub_need_confirm", "sub_daily_limit",
 ];
 
 // 危险工具：需要「重要确认」及以上权限时需用户确认
-const AI_DANGER_TOOLS = ["write_file", "delete_file", "trigger_build", "set_setting"];
+const AI_DANGER_TOOLS = ["write_file", "delete_file", "trigger_build", "set_setting", "save_secret"];
 
 // 生成工具使用说明（含可用密钥占位符名称，绝不含密钥值）
 async function aiToolsHint(db: D1Database): Promise<string> {
@@ -964,8 +974,10 @@ async function aiToolsHint(db: D1Database): Promise<string> {
   return [
     "你已接入该博客后台，可通过工具直接读写仓库文件、触发部署、修改站点设置。",
     "仓库根目录即工作目录；文章位于 source/_posts。修改文件后会自动部署。",
-    "危险操作（写文件 / 删除 / 触发构建 / 改设置）可能会被系统拦截并等待用户确认。",
+    "危险操作（写文件 / 删除 / 触发构建 / 改设置 / 保存密钥）可能会被系统拦截并等待用户确认。",
     "密钥用法：严禁把任何真实密钥写进回答。如需使用密钥，请在写入内容里写占位符（如 {MY_API}），系统会在执行时自动替换为真实值；你无法也不应获取真实密钥。",
+    "凭据规则：绝对不要要求用户把密码/授权码直接发到对话里。若你确实需要而用户尚未提供，请调用 request_secret（系统会弹窗让用户本地输入，你不会看到内容）；若用户已在对话中直接把密码/授权码给了你并要你保存，请调用 save_secret 保存为占位符。",
+    "可用 set_setting 修改的设置项 key：" + AI_SETTING_KEYS.join("、") + "。",
     names.length
       ? "当前可用的密钥占位符：" + names.map((n) => "{" + n + "}").join("、")
       : "当前没有配置任何密钥占位符（管理员可在「设置 → AI 密钥」中添加）。",
@@ -1001,16 +1013,88 @@ async function aiRunTool(env: Bindings, name: string, args: Record<string, unkno
     case "get_settings": {
       const allowGuest = (await getSiteSetting(db, "allow_guest_comment", "true")) !== "false";
       const retention = await getSiteSetting(db, "retention_days", "365");
-      return JSON.stringify({ ok: true, allow_guest_comment: allowGuest, retention_days: retention });
+      const sub = await getSubscribeConfig(db);
+      return JSON.stringify({
+        ok: true,
+        allow_guest_comment: allowGuest,
+        retention_days: retention,
+        smtp: {
+          host: sub.host,
+          port: sub.port,
+          user: sub.user,
+          hasPass: !!sub.pass,
+          fromName: sub.fromName,
+          fromEmail: sub.fromEmail,
+        },
+        subscription: {
+          siteName: sub.siteName,
+          siteUrl: sub.siteUrl,
+          needConfirm: sub.needConfirm,
+          dailyLimit: sub.dailyLimit,
+          subject: sub.subject,
+          body: sub.body,
+          notifySubject: sub.notifySubject,
+          notifyBody: sub.notifyBody,
+          unsubSubject: sub.unsubSubject,
+          unsubBody: sub.unsubBody,
+        },
+      });
     }
     case "set_setting": {
       const key = s("key");
-      const allowed = ["allow_guest_comment", "retention_days"];
-      if (allowed.indexOf(key) < 0)
-        return JSON.stringify({ ok: false, error: "不支持的设置项：" + key + "（允许：" + allowed.join("、") + "）" });
-      await setSiteSetting(db, key, applySecrets(s("value"), secrets));
+      if (AI_SETTING_KEYS.indexOf(key) < 0)
+        return JSON.stringify({ ok: false, error: "不支持的设置项：" + key + "（允许：" + AI_SETTING_KEYS.join("、") + "）" });
+      const val = applySecrets(s("value"), secrets);
+      if (key === "allow_guest_comment" || key === "retention_days") {
+        await setSiteSetting(db, key, val);
+        return JSON.stringify({ ok: true, key, message: "已更新" });
+      }
+      const cur = await getSubscribeConfig(db);
+      const next: SubscribeConfig = { ...cur };
+      const asBool = (v: string) => ["true", "1", "yes", "on", "是"].indexOf(v.trim().toLowerCase()) >= 0;
+      const asInt = (v: string, fb: number, max: number) => {
+        const n = parseInt(v, 10);
+        return Number.isFinite(n) && n > 0 && n <= max ? n : fb;
+      };
+      switch (key) {
+        case "smtp_host": next.host = val.trim(); break;
+        case "smtp_port": next.port = asInt(val, cur.port, 65535); break;
+        case "smtp_user": next.user = val.trim(); break;
+        case "smtp_pass": next.pass = val; break;
+        case "smtp_from_name": next.fromName = val; break;
+        case "smtp_from_email": next.fromEmail = val.trim(); break;
+        case "sub_site_name": next.siteName = val; break;
+        case "sub_site_url": next.siteUrl = val.trim(); break;
+        case "sub_subject": next.subject = val; break;
+        case "sub_body": next.body = val; break;
+        case "sub_notify_subject": next.notifySubject = val; break;
+        case "sub_notify_body": next.notifyBody = val; break;
+        case "sub_unsub_subject": next.unsubSubject = val; break;
+        case "sub_unsub_body": next.unsubBody = val; break;
+        case "sub_need_confirm": next.needConfirm = asBool(val); break;
+        case "sub_daily_limit": next.dailyLimit = asInt(val, cur.dailyLimit, 1000000); break;
+      }
+      await saveSubscribeConfig(db, next);
       return JSON.stringify({ ok: true, key, message: "已更新" });
     }
+    case "save_secret": {
+      const name = s("name").trim();
+      const value = s("value");
+      if (!/^[A-Za-z0-9_.-]{1,64}$/.test(name))
+        return JSON.stringify({ ok: false, error: "名称仅支持字母、数字与 _ . -（1-64 位）" });
+      if (!value) return JSON.stringify({ ok: false, error: "值不能为空" });
+      await ensureSecretTables(db);
+      await db
+        .prepare(
+          `INSERT INTO "wl_Secret" ("name","value","updatedAt") VALUES (?1,?2,datetime('now'))
+           ON CONFLICT("name") DO UPDATE SET "value"=?2,"updatedAt"=datetime('now')`
+        )
+        .bind(name, value)
+        .run();
+      return JSON.stringify({ ok: true, name, message: "已保存为占位符 {" + name + "}" });
+    }
+    case "request_secret":
+      return JSON.stringify({ ok: false, error: "request_secret 需由前端弹窗处理，请勿发送到服务端" });
     default:
       return JSON.stringify({ ok: false, error: "未知工具：" + name });
   }
@@ -1758,8 +1842,11 @@ app.post("/admin/api/unzip-path", async (c) => {
 app.get("/admin/login", (c) => c.html(renderAdminLoginPage(c.env.SITE_URL || "")));
 app.get("/admin/login/", (c) => c.html(renderAdminLoginPage(c.env.SITE_URL || "")));
 // 已登录访问任意后台页直接渲染，不做跳转
-const adminPage = (c: any, initial: string) =>
-  c.html(renderAdminPage(c.env.SITE_URL || "", c.env.GH_REPO || "", initial));
+// 后台页面内联了脚本/样式：禁止缓存，避免更新部署后仍拿到旧界面（如 Markdown 不渲染）
+const adminPage = (c: any, initial: string) => {
+  c.header("Cache-Control", "no-store, must-revalidate");
+  return c.html(renderAdminPage(c.env.SITE_URL || "", c.env.GH_REPO || "", initial));
+};
 app.get("/admin", (c) => adminPage(c, "manage"));
 app.get("/admin/", (c) => adminPage(c, "manage"));
 app.get("/admin/manage", (c) => adminPage(c, "manage"));
@@ -1778,6 +1865,9 @@ app.get("/admin/subscribe", (c) => adminPage(c, "subscribe"));
 app.get("/admin/subscribe/", (c) => adminPage(c, "subscribe"));
 app.get("/admin/ai", (c) => adminPage(c, "ai"));
 app.get("/admin/ai/", (c) => adminPage(c, "ai"));
+// 带会话 id：/admin/ai/<id>，刷新后仍停留在该对话
+app.get("/admin/ai/:id", (c) => adminPage(c, "ai"));
+app.get("/admin/ai/:id/", (c) => adminPage(c, "ai"));
 app.get("/admin/settings", (c) => adminPage(c, "settings"));
 app.get("/admin/settings/", (c) => adminPage(c, "settings"));
 

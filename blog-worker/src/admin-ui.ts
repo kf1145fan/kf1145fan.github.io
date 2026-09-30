@@ -10,6 +10,9 @@
 
 const VDIRTOR_CSS = "https://cdn.jsdelivr.net/npm/vditor@3.11.1/dist/index.css";
 const VDIRTOR_JS = "https://cdn.jsdelivr.net/npm/vditor@3.11.1/dist/index.min.js";
+// AI 消息 Markdown 渲染：使用完整的 GFM 解析器（支持表格、任务列表、删除线等），并用 DOMPurify 防 XSS
+const MARKED_JS = "https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js";
+const DOMPURIFY_JS = "https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js";
 
 const STYLE = `
 :root{color-scheme:light dark;--accent:#f97316;--accent-h:#ea580c;
@@ -190,10 +193,20 @@ a{color:var(--accent);text-decoration:none}
 .ai-body.md h1{font-size:18px}
 .ai-body.md h2{font-size:16px}
 .ai-body.md code{background:var(--hover);border:1px solid var(--border);padding:0 4px;border-radius:2px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px}
-.ai-body.md pre.md-pre{background:var(--hover);border:1px solid var(--border);border-radius:2px;padding:8px 10px;overflow:auto;margin:0 0 8px}
-.ai-body.md pre.md-pre code{background:transparent;border:none;padding:0}
+.ai-body.md pre{background:var(--hover);border:1px solid var(--border);border-radius:2px;padding:8px 10px;overflow:auto;margin:0 0 8px}
+.ai-body.md pre code{background:transparent;border:none;padding:0;font-size:12.5px;line-height:1.6}
 .ai-body.md blockquote{margin:0 0 8px;padding:2px 10px;border-left:2px solid var(--border);color:var(--muted)}
 .ai-body.md hr{border:none;border-top:1px solid var(--border);margin:10px 0}
+.ai-body.md a{text-decoration:underline}
+.ai-body.md img{max-width:100%;height:auto}
+/* GFM 表格（marked 渲染）：窄屏可横向滚动 */
+.ai-body.md table{border-collapse:collapse;margin:0 0 8px;display:block;width:max-content;max-width:100%;overflow:auto}
+.ai-body.md th,.ai-body.md td{border:1px solid var(--border);padding:4px 10px;text-align:left;vertical-align:top}
+.ai-body.md th{background:var(--hover);font-weight:600}
+.ai-body.md tbody tr:nth-child(even){background:color-mix(in srgb,var(--hover) 45%,transparent)}
+/* 任务列表 */
+.ai-body.md li:has(input[type=checkbox]){list-style:none;margin-left:-18px}
+.ai-body.md input[type=checkbox]{width:auto;margin:0 6px 0 0;vertical-align:middle}
 /* 思考过程（可展开/收起） */
 .ai-think{border:1px dashed var(--border);border-radius:2px;padding:6px 10px;margin:0 0 8px;font-size:12.5px;color:var(--muted);background:var(--hover)}
 .ai-think>summary{cursor:pointer;font-size:12px;color:var(--muted);outline:none}
@@ -215,8 +228,14 @@ a{color:var(--accent);text-decoration:none}
 .ai-chat.side-off .ai-side{width:0;padding-left:0;padding-right:0;border-right-width:0}
 .ai-chat-title{font-size:14px;font-weight:600;max-width:46%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:text}
 .ai-icon-btn{display:inline-flex;align-items:center;justify-content:center;padding:4px 6px;line-height:0}
-.ai-recall{margin-left:8px;border:none;background:transparent;color:var(--muted);font-size:11px;cursor:pointer;padding:0}
-.ai-recall:hover{color:var(--accent);text-decoration:underline}
+.ai-acts{display:flex;gap:12px;margin-top:2px}
+.ai-msg.user .ai-acts{justify-content:flex-end}
+.ai-acts button{border:none;background:transparent;color:var(--muted);font-size:11px;cursor:pointer;padding:0;font-family:inherit}
+.ai-acts button:hover{color:var(--accent);text-decoration:underline}
+.ai-secret-mask{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;z-index:1000;padding:16px}
+.ai-secret-box{background:var(--card);border:1px solid var(--border);border-radius:4px;padding:16px;max-width:430px;width:100%}
+.ai-secret-title{font-size:14px;font-weight:600;margin-bottom:8px}
+.ai-secret-desc{font-size:12px;color:var(--muted);margin:0 0 12px;line-height:1.7}
 .ai-tool-note{font-size:12px;color:var(--muted);border-left:2px solid var(--border);padding:4px 10px;margin:0;word-break:break-all;background:var(--hover)}
 .ai-tool-note.err{border-left-color:#dc2626}
 .ai-tool-tag{display:inline-block;font-size:11px;padding:0 6px;margin-right:6px;border:1px solid var(--border);border-radius:2px;color:var(--muted)}
@@ -315,7 +334,9 @@ function go(name){
     if(name==='settings'){ loadSubscribeSettings(); loadSiteSettings(); loadAiSettings(); loadSecrets(); }
     window.scrollTo(0,0);
   }
-  try{ history.replaceState(null,'','/admin/'+name); }catch(e){}
+  // AI 页保留会话 id（/admin/ai/<id>），其余标签页用 /admin/<name>
+  const url = (name === 'ai' && aiConvId) ? ('/admin/ai/' + aiConvId) : ('/admin/' + name);
+  try{ history.replaceState(null,'',url); }catch(e){}
 }
 function switchTab(name){ go(name); }
 
@@ -694,6 +715,7 @@ function aiPickNone(){
 
 // ---------- AI 助手（聊天：流式输出 + 历史记录）----------
 let aiConvId = null;          // 当前会话 id（null 表示新对话，首次保存后回填）
+let aiPendingConv = null;     // 从 URL（/admin/ai/<id>）解析出的待打开会话 id
 let aiConvMessages = [];      // [{role, content}]
 let aiStreaming = false;      // 是否正在流式接收
 let aiAbort = null;           // 中止控制器
@@ -737,6 +759,8 @@ async function loadAiChat(){
     aiUpdateHint();
   }catch(e){}
   aiLoadTools();
+  // URL 带会话 id（/admin/ai/<id>）时，进入页面即打开该对话
+  if(aiPendingConv){ const id = aiPendingConv; aiPendingConv = null; aiOpenConv(id); }
 }
 // 按权限加载工具定义与使用说明（安全访问不加载工具，AI 只能对话）
 async function aiLoadTools(){
@@ -841,12 +865,17 @@ async function loadAiConversations(){
     }).join('');
   }catch(e){ box.innerHTML = '<div class="empty">加载失败</div>'; }
 }
+// 同步地址栏：/admin/ai/<id>（新对话则回到 /admin/ai），刷新后仍停留在当前对话
+function aiSyncUrl(){
+  try{ history.replaceState(null, '', aiConvId ? ('/admin/ai/' + aiConvId) : '/admin/ai'); }catch(e){}
+}
 function aiNewChat(){
   if(aiStreaming){ toast('正在回复中，请稍候', true); return; }
   aiConvId = null; aiConvMessages = []; aiConvTitle = '';
   aiSetTitle('');
   renderAiMessages();
   loadAiConversations();
+  aiSyncUrl();
   const i = $('#aiInput'); if(i) i.focus();
 }
 async function aiOpenConv(id){
@@ -859,6 +888,7 @@ async function aiOpenConv(id){
   aiConvTitle = c.title || '';
   aiSetTitle(aiConvTitle);
   renderAiMessages();
+  aiSyncUrl();
   loadAiConversations();
 }
 // 顶部标题：空标题时回退到首条用户消息前 30 字
@@ -943,6 +973,26 @@ function mdToHtml(src){
   closeList();
   return out;
 }
+// 优先使用完整的 GFM 解析器（marked）渲染，缺失时回退到内置轻量渲染；输出均经 DOMPurify 清洗
+function renderMd(src){
+  const s = String(src == null ? '' : src);
+  const M = (typeof window !== 'undefined') ? window.marked : null;
+  if(M && typeof M.parse === 'function'){
+    try{
+      // 兼容不同版本的配置入口（marked.parse 在 v5+ 可直接调用）
+      const opts = { gfm:true, breaks:true };
+      let html = (typeof M.use === 'function') ? M.parse(s, opts) : M(s, opts);
+      // 链接在新标签打开
+      html = html.replace(/<a href=/g, '<a target="_blank" rel="noopener noreferrer" href=');
+      const D = (typeof window !== 'undefined') ? window.DOMPurify : null;
+      if(D && typeof D.sanitize === 'function'){
+        html = D.sanitize(html, { ADD_ATTR:['target', 'rel'] });
+      }
+      return html;
+    }catch(e){}
+  }
+  return mdToHtml(s);
+}
 // 工具结果：紧凑展示
 function aiToolNoteHtml(m){
   const denied = !!(m && m.denied);
@@ -986,12 +1036,38 @@ function aiRecall(i){
   const inp = $('#aiInput'); if(inp){ inp.value = text; inp.focus(); }
   aiSaveConversation();
 }
+// 复制消息原始内容（Markdown 源码 / 纯文本）
+function aiCopy(i){
+  if(i < 0 || i >= aiConvMessages.length) return;
+  const m = aiConvMessages[i] || {};
+  const text = (typeof m.content === 'string') ? m.content : '';
+  if(!text){ toast('没有可复制的内容', true); return; }
+  const done = function(){ toast('已复制'); };
+  const fallback = function(){
+    try{
+      const ta = document.createElement('textarea');
+      ta.value = text; ta.style.position = 'fixed'; ta.style.left = '-9999px';
+      document.body.appendChild(ta); ta.select();
+      document.execCommand('copy'); ta.remove(); toast('已复制');
+    }catch(e){ toast('复制失败', true); }
+  };
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text).then(done).catch(fallback);
+  } else fallback();
+}
 function aiBubbleHtml(role, content, idx, m){
   m = m || {};
   if(role === 'tool') return aiToolNoteHtml(m);
   const isUser = role === 'user';
-  const recall = (idx === undefined || idx === null) ? '' :
-    '<button class="ai-recall" title="撤回这条及之后的消息" onclick="aiRecall('+idx+')">撤回</button>';
+  const hasText = content !== undefined && content !== null && String(content) !== '';
+  const hasIdx = !(idx === undefined || idx === null);
+  // 消息操作统一放到气泡底部：复制（复制原始 Markdown/文本）+ 撤回（仅用户消息）
+  let acts = '';
+  if(hasText || hasIdx){
+    const copy = hasText ? '<button title="复制消息内容" onclick="aiCopy('+idx+')">复制</button>' : '';
+    const recall = hasIdx ? '<button title="撤回这条及之后的消息" onclick="aiRecall('+idx+')">撤回</button>' : '';
+    acts = '<div class="ai-acts">'+copy+recall+'</div>';
+  }
   // 工具调用：批量时折叠，可展开
   let extra = '';
   if(m.tool_calls && m.tool_calls.length){
@@ -1008,12 +1084,12 @@ function aiBubbleHtml(role, content, idx, m){
   const think = (!isUser && m.reasoning)
     ? '<details class="ai-think"><summary>思考过程</summary><div class="ai-think-body">'+esc(m.reasoning)+'</div></details>'
     : '';
-  const hasText = content !== undefined && content !== null && String(content) !== '';
   return '<div class="ai-msg '+(isUser?'user':'assistant')+'">'+
-    '<div class="ai-who">'+(isUser?'我':'AI')+recall+'</div>'+
+    '<div class="ai-who">'+(isUser?'我':'AI')+'</div>'+
     think +
-    (hasText ? '<div class="ai-body'+(isUser?'':' md')+'">'+(isUser?esc(content):mdToHtml(content))+'</div>' : '')+
+    (hasText ? '<div class="ai-body'+(isUser?'':' md')+'">'+(isUser?esc(content):renderMd(content))+'</div>' : '')+
     extra +
+    acts +
   '</div>';
 }
 function scrollAiBottom(){ const box = $('#aiMessages'); if(box) box.scrollTop = box.scrollHeight; }
@@ -1081,17 +1157,25 @@ async function aiAgentLoop(){
           const t = res.toolCalls[k];
           let args = {};
           try{ args = JSON.parse(t.arguments || '{}'); }catch(e){ args = {}; }
-          let allow = true;
-          if(aiNeedConfirm(t.name)) allow = await aiAskConfirm(t.name, args);
-          let resultStr;
-          if(allow){
-            const rr = await api('/admin/api/ai/tool', { method:'POST', body: JSON.stringify({ name:t.name, args:args }) });
-            if(rr.ok && rr.data && rr.data.ok) resultStr = String(rr.data.result || '');
-            else resultStr = JSON.stringify({ ok:false, error:(rr.data && rr.data.error) || '执行失败' });
+          let resultStr, denied = false;
+          if(t.name === 'request_secret'){
+            // 凭据只能由用户在前端本地输入，绝不经过 AI：弹窗收集后直接写入服务端
+            const out = await aiAskSecret(args);
+            if(!out.ok) denied = true;
+            resultStr = JSON.stringify(out);
           } else {
-            resultStr = JSON.stringify({ ok:false, error:'用户已拒绝执行该操作' });
+            let allow = true;
+            if(aiNeedConfirm(t.name)) allow = await aiAskConfirm(t.name, args);
+            if(allow){
+              const rr = await api('/admin/api/ai/tool', { method:'POST', body: JSON.stringify({ name:t.name, args:args }) });
+              if(rr.ok && rr.data && rr.data.ok) resultStr = String(rr.data.result || '');
+              else resultStr = JSON.stringify({ ok:false, error:(rr.data && rr.data.error) || '执行失败' });
+            } else {
+              denied = true;
+              resultStr = JSON.stringify({ ok:false, error:'用户已拒绝执行该操作' });
+            }
           }
-          aiConvMessages.push({ role:'tool', tool_call_id:t.id, name:t.name, content: resultStr, denied: !allow });
+          aiConvMessages.push({ role:'tool', tool_call_id:t.id, name:t.name, content: resultStr, denied: denied });
         }
         renderAiMessages();
         continue;
@@ -1189,7 +1273,7 @@ async function aiStreamRound(modelName, ui){
       if(delta.content){
         acc += delta.content;
         const now = Date.now();
-        if(ui && ui.bodyEl && (now - lastPaint > 80)){ lastPaint = now; ui.bodyEl.innerHTML = mdToHtml(acc); scrollAiBottom(); }
+        if(ui && ui.bodyEl && (now - lastPaint > 80)){ lastPaint = now; ui.bodyEl.innerHTML = renderMd(acc); scrollAiBottom(); }
       }
       if(delta.tool_calls && delta.tool_calls.length){
         for(let ti=0; ti<delta.tool_calls.length; ti++){
@@ -1211,7 +1295,7 @@ async function aiStreamRound(modelName, ui){
     return { id: t.id || ('call_' + k), name: t.name, arguments: t.args || '{}' };
   }).filter(function(t){ return !!t.name; });
   // 收尾：把流式内容按 Markdown 完整渲染一次
-  if(ui && ui.bodyEl) ui.bodyEl.innerHTML = mdToHtml(acc);
+  if(ui && ui.bodyEl) ui.bodyEl.innerHTML = renderMd(acc);
   if(aiThink && ui && ui.thinkEl && !reasonAcc) ui.thinkEl.style.display = 'none';
   scrollAiBottom();
   return { content: acc, toolCalls: toolCalls, reasoning: reasonAcc };
@@ -1222,6 +1306,10 @@ function aiAskConfirm(name, args){
     const box = $('#aiCol');
     if(!box){ resolve(false); return; }
     let argTxt = '';
+    // save_secret 的确认卡片里不展示真实凭据值
+    if(name === 'save_secret' && args && args.value){
+      args = Object.assign({}, args, { value: '（已隐藏）' });
+    }
     try{ argTxt = JSON.stringify(args, null, 2); }catch(e){ argTxt = String(args); }
     const div = document.createElement('div');
     div.className = 'ai-tool-confirm';
@@ -1237,6 +1325,50 @@ function aiAskConfirm(name, args){
     div.querySelector('[data-no]').onclick = function(){ div.remove(); resolve(false); };
   });
 }
+// AI 需要凭据但用户尚未提供：前端弹窗本地输入，值直接写入服务端密钥库，绝不发送给 AI
+function aiAskSecret(args){
+  args = args || {};
+  return new Promise(function(resolve){
+    const preName = String(args.name || '').trim();
+    const purpose = String(args.purpose || preName || '凭据');
+    const mask = document.createElement('div');
+    mask.className = 'ai-secret-mask';
+    mask.innerHTML = '<div class="ai-secret-box">'+
+      '<div class="ai-secret-title">AI 请求你提供凭据</div>'+
+      '<p class="ai-secret-desc">用途：'+esc(purpose)+'<br>该内容<b>不会发送给 AI</b>，将直接安全写入服务端，之后 AI 只能用占位符引用。</p>'+
+      '<label class="wk-label">占位符名称</label>'+
+      '<input class="wk-input" data-name value="'+esc(preName)+'" placeholder="如 SMTP_PASS">'+
+      '<label class="wk-label">凭据值</label>'+
+      '<input class="wk-input" type="password" data-value placeholder="在此输入，不会发给 AI">'+
+      '<div class="filters" style="margin:14px 0 0">'+
+        '<button class="wk-btn sm" data-ok>保存</button>'+
+        '<button class="wk-btn ghost sm" data-cancel>取消</button>'+
+      '</div>'+
+      '<div class="msg" data-msg></div>'+
+    '</div>';
+    document.body.appendChild(mask);
+    const nameEl = mask.querySelector('[data-name]');
+    const valEl = mask.querySelector('[data-value]');
+    const msgEl = mask.querySelector('[data-msg]');
+    if(preName) valEl.focus(); else nameEl.focus();
+    const close = function(v){ mask.remove(); resolve(v); };
+    mask.querySelector('[data-cancel]').onclick = function(){ close({ ok:false, error:'用户取消输入' }); };
+    mask.querySelector('[data-ok]').onclick = async function(){
+      const nm = (nameEl.value || '').trim();
+      const v = valEl.value || '';
+      if(!nm){ msgEl.className = 'msg err'; msgEl.textContent = '请填写占位符名称'; return; }
+      if(!v){ msgEl.className = 'msg err'; msgEl.textContent = '请填写凭据值'; return; }
+      const r = await api('/admin/api/secrets', { method:'PUT', body: JSON.stringify({ name:nm, value:v }) });
+      if(r.ok){
+        toast('凭据已安全保存');
+        try{ loadSecrets(); }catch(e){}
+        close({ ok:true, name:nm, saved:true, message:'凭据已安全保存，可用占位符 {'+nm+'} 引用' });
+      } else {
+        msgEl.className = 'msg err'; msgEl.textContent = (r.data && r.data.error) || '保存失败';
+      }
+    };
+  });
+}
 
 async function aiSaveConversation(){
   if(!aiConvMessages.length && !aiConvId) return;
@@ -1246,7 +1378,7 @@ async function aiSaveConversation(){
     method:'PUT',
     body: JSON.stringify({ id: aiConvId, title: title, messages: aiConvMessages })
   });
-  if(r.ok && r.data && r.data.id){ aiConvId = r.data.id; loadAiConversations(); }
+  if(r.ok && r.data && r.data.id){ aiConvId = r.data.id; aiSyncUrl(); loadAiConversations(); }
 }
 
 // ---------- AI 密钥（占位符 {name}，仅存名称，值不下发）----------
@@ -2053,6 +2185,11 @@ function redirectLogin(){ location.replace('/admin/login'); }
 document.addEventListener('DOMContentLoaded', ()=>{
   token = getToken();
   if(!token){ redirectLogin(); return; }
+  // 记录 URL 中的会话 id（/admin/ai/<id>），供进入 AI 页时自动打开
+  try{
+    const m = location.pathname.match(/\\/admin\\/ai\\/([^\\/]+)\\/?$/);
+    if(m) aiPendingConv = decodeURIComponent(m[1]);
+  }catch(e){}
   // 校验 token，无效跳登录页
   fetch('/waline/api/token',{headers:{Authorization:'Bearer '+token}})
     .then(r=>r.json()).then(d=>{
@@ -2600,7 +2737,7 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
         <details class="wk-collapse" style="margin-top:12px;background:transparent;border:1px solid var(--border)">
           <summary>AI 密钥（占位符，安全）</summary>
           <div class="wk-collapse-body" style="border-top:1px solid var(--border)">
-            <p class="wk-label" style="margin-top:0">在此保存密钥（如第三方 API Key）。密钥值仅保存在服务端，<b>绝不会下发给 AI，也不会写进提示词</b>。AI 在写入文件或设置时使用占位符 <code>{名称}</code>，执行时会自动替换为真实值。</p>
+            <p class="wk-label" style="margin-top:0">在此保存密钥（如第三方 API Key）。密钥值仅保存在服务端，<b>绝不会下发给 AI，也不会写进提示词</b>。AI 在写入文件或设置时使用占位符 <code>{名称}</code>，执行时会自动替换为真实值。<br>若 AI 需要凭据而你不便在对话里提供，它会发起<b>弹窗</b>让你在本地输入，输入内容直接写入服务端、<b>不会发送给 AI</b>。</p>
             <div class="wk-row">
               <div style="flex:1">
                 <label class="wk-label">名称（用于占位符，如 MY_API）</label>
@@ -2794,6 +2931,8 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
 </div>
 
 <script src="${VDIRTOR_JS}"></script>
+<script src="${MARKED_JS}"></script>
+<script src="${DOMPURIFY_JS}"></script>
 <script>var __INITIAL__='${INITIAL}';</script>
 <script>${SCRIPT.replace(/__REPO__/g, repo)}</script>
 </body>
