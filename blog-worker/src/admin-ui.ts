@@ -217,8 +217,11 @@ a{color:var(--accent);text-decoration:none}
 .ai-tools-fold>summary:hover{color:var(--fg)}
 .ai-tools-fold>div{padding:0 10px 8px}
 .ai-input{display:flex;gap:8px;align-items:flex-end;padding:8px 14px 12px;flex-shrink:0}
-.ai-input textarea{flex:1;resize:vertical;min-height:34px;border-radius:2px}
-.ai-foot{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:10px 14px 0;border-top:1px solid var(--border);flex-shrink:0}
+/* 输入框不显示拖拽手柄：随内容自动向上增高（到上限后内部滚动） */
+.ai-input textarea{flex:1;resize:none;min-height:34px;max-height:220px;overflow-y:hidden;border-radius:2px}
+.ai-foot{display:flex;align-items:center;gap:8px;flex-wrap:nowrap;overflow-x:auto;padding:10px 14px 0;border-top:1px solid var(--border);flex-shrink:0}
+.ai-foot .wk-label{flex:0 0 auto;white-space:nowrap}
+.ai-foot select.wk-input{flex-shrink:1}
 .ai-model-list{max-height:240px;overflow:auto;display:flex;flex-wrap:wrap;gap:6px;align-content:flex-start}
 .ai-pick{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--border);border-radius:2px;padding:3px 8px;font-size:12px;cursor:pointer;background:var(--input-bg)}
 .ai-pick:hover{background:var(--hover)}
@@ -1063,10 +1066,11 @@ function aiBubbleHtml(role, content, idx, m){
   const hasIdx = !(idx === undefined || idx === null);
   // 消息操作统一放到气泡底部：复制（复制原始 Markdown/文本）+ 撤回（仅用户消息）
   let acts = '';
-  if(hasText || hasIdx){
+  if(hasText || (hasIdx && isUser)){
     const copy = hasText ? '<button title="复制消息内容" onclick="aiCopy('+idx+')">复制</button>' : '';
-    const recall = hasIdx ? '<button title="撤回这条及之后的消息" onclick="aiRecall('+idx+')">撤回</button>' : '';
-    acts = '<div class="ai-acts">'+copy+recall+'</div>';
+    // 只有用户消息可撤回；AI 消息不显示撤回
+    const recall = (hasIdx && isUser) ? '<button title="撤回这条及之后的消息" onclick="aiRecall('+idx+')">撤回</button>' : '';
+    if(copy || recall) acts = '<div class="ai-acts">'+copy+recall+'</div>';
   }
   // 工具调用：批量时折叠，可展开
   let extra = '';
@@ -1095,13 +1099,21 @@ function aiBubbleHtml(role, content, idx, m){
 function scrollAiBottom(){ const box = $('#aiMessages'); if(box) box.scrollTop = box.scrollHeight; }
 function aiStop(){ if(aiAbort){ try{ aiAbort.abort(); }catch(e){} } }
 
+// 输入框自动增高（底部对齐，视觉上向上拉升）；超过上限后内部滚动
+function aiAutoGrow(){
+  const el = $('#aiInput'); if(!el) return;
+  el.style.height = 'auto';
+  const max = 220;
+  el.style.height = Math.min(el.scrollHeight, max) + 'px';
+  el.style.overflowY = el.scrollHeight > max ? 'auto' : 'hidden';
+}
 async function aiSend(){
   if(aiStreaming) return;
   const input = $('#aiInput');
   const text = ((input && input.value) || '').trim();
   if(!text){ toast('请输入内容', true); return; }
   aiConvMessages.push({ role:'user', content:text });
-  if(input) input.value = '';
+  if(input){ input.value = ''; aiAutoGrow(); }
   aiSetTitle(aiConvTitle);
   renderAiMessages();
   await aiAgentLoop();
@@ -2209,9 +2221,14 @@ document.addEventListener('DOMContentLoaded', ()=>{
   };
   // AI 助手：Enter 发送，Shift+Enter 换行
   const aiInputEl = $('#aiInput');
-  if(aiInputEl) aiInputEl.addEventListener('keydown', e=>{
-    if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); aiSend(); }
-  });
+  if(aiInputEl){
+    aiInputEl.addEventListener('keydown', e=>{
+      if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); aiSend(); }
+    });
+    // 输入框随内容自动增高（上限后内部滚动），因为是底部对齐，视觉上向上拉升
+    aiInputEl.addEventListener('input', aiAutoGrow);
+    aiAutoGrow();
+  }
   // 新建文章：重置表单后 SPA 进入写作页（不刷新）
   $('#newBtn').onclick=()=>{
     editingPath='';
@@ -2553,16 +2570,16 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
         <div class="msg" id="aiChatMsg" style="margin:0 14px"></div>
         <div class="ai-foot">
           <span class="wk-label" style="margin:0">模型</span>
-          <select class="wk-input" id="aiChatModel" style="width:auto;min-width:170px;max-width:260px;padding:4px 8px"></select>
+          <select class="wk-input" id="aiChatModel" style="width:auto;flex:1 1 200px;min-width:120px;max-width:320px;padding:4px 8px"></select>
           <span class="wk-label" style="margin:0">权限</span>
-          <select class="wk-input" id="aiChatPermission" onchange="aiSetPermission(this.value)" style="width:auto;min-width:200px;max-width:300px;padding:4px 8px">
+          <select class="wk-input" id="aiChatPermission" onchange="aiSetPermission(this.value)" style="width:auto;flex:1 1 200px;min-width:150px;max-width:320px;padding:4px 8px">
             <option value="safe">安全访问 · 仅对话</option>
             <option value="important">重要确认 · 危险操作确认</option>
             <option value="all">全部确认 · 每步都确认</option>
             <option value="full">完全访问 · 无需确认</option>
           </select>
           <span class="wk-label" style="margin:0">思考强度</span>
-          <select class="wk-input" id="aiChatThink" onchange="aiSetThink(this.value)" title="思考强度会作为 reasoning_effort 发给服务商；需所选模型支持推理（如 deepseek-reasoner），不支持时会报错" style="width:auto;min-width:120px;max-width:180px;padding:4px 8px">
+          <select class="wk-input" id="aiChatThink" onchange="aiSetThink(this.value)" title="思考强度会作为 reasoning_effort 发给服务商；需所选模型支持推理（如 deepseek-reasoner），不支持时会报错" style="width:auto;flex:0 0 auto;min-width:100px;padding:4px 8px">
             <option value="off">关闭</option>
             <option value="low">低</option>
             <option value="medium">中</option>

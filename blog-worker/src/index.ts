@@ -954,6 +954,7 @@ const AI_TOOLS = [
   { type: "function", function: { name: "set_setting", description: "修改站点设置。key 支持：站点功能 allow_guest_comment / retention_days；邮件服务器 smtp_host / smtp_port / smtp_user / smtp_pass / smtp_from_name / smtp_from_email；订阅设置 sub_site_name / sub_site_url / sub_need_confirm / sub_daily_limit；订阅邮件模板 sub_subject / sub_body / sub_notify_subject / sub_notify_body / sub_unsub_subject / sub_unsub_body。", parameters: { type: "object", properties: { key: { type: "string" }, value: { type: "string" } }, required: ["key", "value"] } } },
   { type: "function", function: { name: "save_secret", description: "当用户在对话中直接给出了密钥/授权码/密码并要你保存时调用。name 为占位符名称（如 SMTP_PASS），value 为用户给出的真实值；保存后在写入文件或设置时用 {name} 引用。", parameters: { type: "object", properties: { name: { type: "string" }, value: { type: "string" } }, required: ["name", "value"] } } },
   { type: "function", function: { name: "request_secret", description: "当需要用户提供密钥/授权码/密码，但用户尚未在对话中提供时调用：系统会弹窗让用户在本地输入，输入内容不会发送给你，你只会收到是否设置成功的结果。切勿要求用户把密码直接发到对话里。", parameters: { type: "object", properties: { name: { type: "string", description: "占位符名称，如 SMTP_PASS" }, purpose: { type: "string", description: "用途说明，会展示给用户" } }, required: ["name"] } } },
+  { type: "function", function: { name: "send_email", description: "使用已配置的 SMTP 发送邮件。默认发送单封给 to；若 broadcast=true 则群发给全部「已确认」的订阅者（忽略 to）。主题/正文必填，正文支持 HTML，可用 {{site}} {{email}} {{unsubscribe}} 变量。", parameters: { type: "object", properties: { to: { type: "string", description: "收件邮箱（发单封时必填）" }, subject: { type: "string" }, body: { type: "string", description: "正文，支持 HTML" }, broadcast: { type: "boolean", description: "true 时群发给全部已确认订阅者" } }, required: ["subject", "body"] } } },
 ];
 
 // set_setting 允许修改的设置项（站点功能走 wl_Settings，其余写入订阅/SMTP 配置）
@@ -965,7 +966,7 @@ const AI_SETTING_KEYS = [
 ];
 
 // 危险工具：需要「重要确认」及以上权限时需用户确认
-const AI_DANGER_TOOLS = ["write_file", "delete_file", "trigger_build", "set_setting", "save_secret"];
+const AI_DANGER_TOOLS = ["write_file", "delete_file", "trigger_build", "set_setting", "save_secret", "send_email"];
 
 // 生成工具使用说明（含可用密钥占位符名称，绝不含密钥值）
 async function aiToolsHint(db: D1Database): Promise<string> {
@@ -974,10 +975,11 @@ async function aiToolsHint(db: D1Database): Promise<string> {
   return [
     "你已接入该博客后台，可通过工具直接读写仓库文件、触发部署、修改站点设置。",
     "仓库根目录即工作目录；文章位于 source/_posts。修改文件后会自动部署。",
-    "危险操作（写文件 / 删除 / 触发构建 / 改设置 / 保存密钥）可能会被系统拦截并等待用户确认。",
+    "危险操作（写文件 / 删除 / 触发构建 / 改设置 / 保存密钥 / 发邮件）可能会被系统拦截并等待用户确认。",
     "密钥用法：严禁把任何真实密钥写进回答。如需使用密钥，请在写入内容里写占位符（如 {MY_API}），系统会在执行时自动替换为真实值；你无法也不应获取真实密钥。",
     "凭据规则：绝对不要要求用户把密码/授权码直接发到对话里。若你确实需要而用户尚未提供，请调用 request_secret（系统会弹窗让用户本地输入，你不会看到内容）；若用户已在对话中直接把密码/授权码给了你并要你保存，请调用 save_secret 保存为占位符。",
     "可用 set_setting 修改的设置项 key：" + AI_SETTING_KEYS.join("、") + "。",
+    "发邮件：用 send_email 发单封（to）或 broadcast=true 群发给已确认订阅者；需先在设置里配置 SMTP。发送前可先用 get_settings 确认 smtp.host 与 hasPass。",
     names.length
       ? "当前可用的密钥占位符：" + names.map((n) => "{" + n + "}").join("、")
       : "当前没有配置任何密钥占位符（管理员可在「设置 → AI 密钥」中添加）。",
@@ -1095,6 +1097,29 @@ async function aiRunTool(env: Bindings, name: string, args: Record<string, unkno
     }
     case "request_secret":
       return JSON.stringify({ ok: false, error: "request_secret 需由前端弹窗处理，请勿发送到服务端" });
+    case "send_email": {
+      const cfg = await getSubscribeConfig(db);
+      if (!cfg.host || !cfg.port)
+        return JSON.stringify({ ok: false, error: "请先在「设置 → SMTP 邮件服务器」配置 SMTP（Workers 仅支持 465 端口）" });
+      const subject = applySecrets(s("subject"), secrets).trim();
+      const bodyHtml = applySecrets(s("body"), secrets);
+      if (!subject || !bodyHtml) return JSON.stringify({ ok: false, error: "subject 与 body 不能为空" });
+      const broadcast = args.broadcast === true || String(args.broadcast || "") === "true";
+      try {
+        if (broadcast) {
+          const origin = (env.SITE_URL || "").replace(/\/+$/, "");
+          const r = await broadcastToConfirmed(env, subject, bodyHtml, {}, origin);
+          if (!r.total) return JSON.stringify({ ok: false, error: "暂无已确认的订阅者" });
+          return JSON.stringify({ ok: true, sent: r.sent, failed: r.failed, total: r.total, limited: r.total > 100, message: "群发完成" });
+        }
+        const to = applySecrets(s("to"), secrets).trim();
+        if (!to) return JSON.stringify({ ok: false, error: "请提供收件邮箱 to，或设置 broadcast=true 群发" });
+        await sendMail(mailSmtp(cfg), { to, subject, html: wrapMailHtml(bodyHtml) });
+        return JSON.stringify({ ok: true, message: "已发送给 " + to });
+      } catch (e) {
+        return JSON.stringify({ ok: false, error: e instanceof Error ? e.message : String(e) });
+      }
+    }
     default:
       return JSON.stringify({ ok: false, error: "未知工具：" + name });
   }
