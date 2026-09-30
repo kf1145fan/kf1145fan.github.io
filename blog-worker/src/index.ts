@@ -449,6 +449,7 @@ interface AiConfig {
   prompt: string; // 系统提示词（AI 助手的角色设定）
   enabled: boolean; // 是否启用
   clientProxy: boolean; // 前端代理：由浏览器直连服务商
+  permission: string; // 权限级别：safe 安全访问 / important 重要确认 / all 全部确认 / full 完全访问
 }
 
 const AI_DEFAULT_CONFIG: AiConfig = {
@@ -459,7 +460,15 @@ const AI_DEFAULT_CONFIG: AiConfig = {
   prompt: "",
   enabled: false,
   clientProxy: false,
+  permission: "safe",
 };
+
+// 权限级别白名单：非法值回退为 safe（安全访问）
+const AI_PERMISSIONS = ["safe", "important", "all", "full"];
+function normalizePermission(v: unknown): string {
+  const s = String(v ?? "").trim();
+  return AI_PERMISSIONS.indexOf(s) >= 0 ? s : "safe";
+}
 
 const AI_CONFIG_KEY = "ai_config";
 
@@ -515,6 +524,7 @@ app.put("/admin/api/ai/settings", async (c) => {
       prompt: body.prompt === undefined ? cur.prompt : String(body.prompt),
       enabled: body.enabled === undefined ? cur.enabled : !!body.enabled,
       clientProxy: body.clientProxy === undefined ? cur.clientProxy : !!body.clientProxy,
+      permission: body.permission === undefined ? cur.permission : normalizePermission(body.permission),
     };
     await saveAiConfig(db, next);
     return json({ ok: true, ...next, apiKey: "", hasKey: !!next.apiKey });
@@ -782,6 +792,8 @@ app.post("/admin/api/ai/chat", async (c) => {
   if (!baseUrl) return json({ ok: false, error: "请先在「设置 → AI 设置」填写并保存 API 地址" }, 400);
   if (!model) return json({ ok: false, error: "请先填写默认模型（或在聊天页指定模型）" }, 400);
   if (!messages.length) return json({ ok: false, error: "messages required" }, 400);
+  // 工具调用：前端仅在权限允许时下发 tools，此处原样转发给上游
+  const tools = Array.isArray(body.tools) ? (body.tools as unknown[]) : null;
   try {
     const upstream = await fetch(aiEndpoint(baseUrl, "/chat/completions"), {
       method: "POST",
@@ -790,7 +802,12 @@ app.post("/admin/api/ai/chat", async (c) => {
         Accept: "text/event-stream",
         ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
       },
-      body: JSON.stringify({ model, messages: msgs, stream: true }),
+      body: JSON.stringify({
+        model,
+        messages: msgs,
+        stream: true,
+        ...(tools && tools.length ? { tools, tool_choice: "auto" } : {}),
+      }),
     });
     if (!upstream.ok || !upstream.body) {
       const text = await upstream.text().catch(() => "");
@@ -810,6 +827,201 @@ app.post("/admin/api/ai/chat", async (c) => {
         "X-Accel-Buffering": "no",
       },
     });
+  } catch (e) {
+    return json({ ok: false, error: String(e) }, 500);
+  }
+});
+
+// ---------- 3.595 AI 密钥（占位符 {name}）：值不下发给 AI，仅在执行工具时替换 ----------
+// 密钥仅管理员可维护；列表接口只返回名称，绝不回传明文，避免密钥进入 AI 上下文。
+interface SecretRow {
+  name: string;
+  value: string;
+}
+
+let aiSecretTablesReady: Promise<unknown> | null = null;
+function ensureSecretTables(db: D1Database): Promise<unknown> {
+  if (!aiSecretTablesReady) {
+    aiSecretTablesReady = db
+      .prepare(
+        `CREATE TABLE IF NOT EXISTS "wl_Secret" (
+          "name" TEXT PRIMARY KEY,
+          "value" TEXT NOT NULL DEFAULT '',
+          "updatedAt" TEXT DEFAULT (datetime('now'))
+        )`
+      )
+      .run()
+      .catch((e) => {
+        aiSecretTablesReady = null;
+        throw e;
+      });
+  }
+  return aiSecretTablesReady;
+}
+
+async function getSecrets(db: D1Database): Promise<SecretRow[]> {
+  await ensureSecretTables(db);
+  const rows = await db.prepare(`SELECT "name","value" FROM "wl_Secret" ORDER BY "name"`).all();
+  return (rows.results || []) as unknown as SecretRow[];
+}
+
+// 把文本中的 {name} 替换为真实密钥值；未定义的占位符原样保留
+function applySecrets(text: string, secrets: SecretRow[]): string {
+  if (!text) return text;
+  let out = text;
+  for (const s of secrets) {
+    if (!s.name) continue;
+    out = out.split("{" + s.name + "}").join(s.value);
+  }
+  return out;
+}
+
+// GET 密钥名称列表（仅名称）
+app.get("/admin/api/secrets", async (c) => {
+  if (!isAdmin(c.get("userInfo"))) return json({ error: "unauthorized" }, 401);
+  try {
+    const list = await getSecrets((c.env as Bindings).DB);
+    return json({ ok: true, names: list.map((s) => s.name) });
+  } catch (e) {
+    return json({ ok: false, error: String(e) }, 500);
+  }
+});
+
+// PUT 新增/更新密钥（值仅保存于服务端）
+app.put("/admin/api/secrets", async (c) => {
+  if (!isAdmin(c.get("userInfo"))) return json({ error: "unauthorized" }, 401);
+  const db = (c.env as Bindings).DB;
+  const body = (await c.req.json().catch(() => ({}))) as { name?: unknown; value?: unknown };
+  const name = String(body.name || "").trim();
+  const value = String(body.value ?? "");
+  if (!/^[A-Za-z0-9_.-]{1,64}$/.test(name))
+    return json({ ok: false, error: "名称仅支持字母、数字与 _ . -（1-64 位）" }, 400);
+  if (!value) return json({ ok: false, error: "密钥值不能为空" }, 400);
+  try {
+    await ensureSecretTables(db);
+    await db
+      .prepare(
+        `INSERT INTO "wl_Secret" ("name","value","updatedAt") VALUES (?1,?2,datetime('now'))
+         ON CONFLICT("name") DO UPDATE SET "value"=?2,"updatedAt"=datetime('now')`
+      )
+      .bind(name, value)
+      .run();
+    return json({ ok: true, name });
+  } catch (e) {
+    return json({ ok: false, error: String(e) }, 500);
+  }
+});
+
+// DELETE 删除密钥
+app.delete("/admin/api/secrets", async (c) => {
+  if (!isAdmin(c.get("userInfo"))) return json({ error: "unauthorized" }, 401);
+  const db = (c.env as Bindings).DB;
+  const name = String(c.req.query("name") || "").trim();
+  if (!name) return json({ ok: false, error: "name required" }, 400);
+  try {
+    await ensureSecretTables(db);
+    await db.prepare(`DELETE FROM "wl_Secret" WHERE "name"=?1`).bind(name).run();
+    return json({ ok: true, name });
+  } catch (e) {
+    return json({ ok: false, error: String(e) }, 500);
+  }
+});
+
+// ---------- 3.596 AI 工具（AI 主动调用，服务端执行；危险操作由前端按权限确认）----------
+// 工具定义遵循 OpenAI function calling 规范
+const AI_TOOLS = [
+  { type: "function", function: { name: "list_files", description: "列出博客仓库某个目录下的文件（path 为空表示仓库根目录）", parameters: { type: "object", properties: { path: { type: "string", description: "目录路径，如 source/_posts" } } } } },
+  { type: "function", function: { name: "read_file", description: "读取仓库中某个文本文件的内容", parameters: { type: "object", properties: { path: { type: "string", description: "文件完整路径" } }, required: ["path"] } } },
+  { type: "function", function: { name: "list_branches", description: "列出仓库分支及当前分支", parameters: { type: "object", properties: {} } } },
+  { type: "function", function: { name: "write_file", description: "新建或覆盖写入一个文本文件并提交到仓库（会自动触发部署）", parameters: { type: "object", properties: { path: { type: "string" }, content: { type: "string" } }, required: ["path", "content"] } } },
+  { type: "function", function: { name: "delete_file", description: "删除仓库中的文件或目录（移入回收站，可恢复）", parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } } },
+  { type: "function", function: { name: "build_status", description: "查询最近的部署构建状态", parameters: { type: "object", properties: {} } } },
+  { type: "function", function: { name: "trigger_build", description: "手动触发一次部署构建", parameters: { type: "object", properties: {} } } },
+  { type: "function", function: { name: "get_settings", description: "读取站点设置", parameters: { type: "object", properties: {} } } },
+  { type: "function", function: { name: "set_setting", description: "修改站点设置，key 仅支持 allow_guest_comment / retention_days", parameters: { type: "object", properties: { key: { type: "string" }, value: { type: "string" } }, required: ["key", "value"] } } },
+];
+
+// 危险工具：需要「重要确认」及以上权限时需用户确认
+const AI_DANGER_TOOLS = ["write_file", "delete_file", "trigger_build", "set_setting"];
+
+// 生成工具使用说明（含可用密钥占位符名称，绝不含密钥值）
+async function aiToolsHint(db: D1Database): Promise<string> {
+  const secrets = await getSecrets(db).catch(() => [] as SecretRow[]);
+  const names = secrets.map((s) => s.name);
+  return [
+    "你已接入该博客后台，可通过工具直接读写仓库文件、触发部署、修改站点设置。",
+    "仓库根目录即工作目录；文章位于 source/_posts。修改文件后会自动部署。",
+    "危险操作（写文件 / 删除 / 触发构建 / 改设置）可能会被系统拦截并等待用户确认。",
+    "密钥用法：严禁把任何真实密钥写进回答。如需使用密钥，请在写入内容里写占位符（如 {MY_API}），系统会在执行时自动替换为真实值；你无法也不应获取真实密钥。",
+    names.length
+      ? "当前可用的密钥占位符：" + names.map((n) => "{" + n + "}").join("、")
+      : "当前没有配置任何密钥占位符（管理员可在「设置 → AI 密钥」中添加）。",
+  ].join("\n");
+}
+
+// 执行工具，返回给 AI 的文本结果（JSON 字符串）
+async function aiRunTool(env: Bindings, name: string, args: Record<string, unknown>): Promise<string> {
+  const db = env.DB;
+  const secrets = await getSecrets(db).catch(() => [] as SecretRow[]);
+  const s = (k: string) => (args && args[k] !== undefined && args[k] !== null ? String(args[k]) : "");
+  const jr = async (r: Response) => JSON.stringify(await r.json().catch(() => ({})));
+  switch (name) {
+    case "list_files":
+      return jr(await handleListFiles(env, s("path")));
+    case "read_file": {
+      const r = await handleGetFile(env, s("path"));
+      const d = (await r.json().catch(() => ({}))) as { content?: unknown };
+      if (d && typeof d.content === "string" && d.content.length > 100000)
+        d.content = d.content.slice(0, 100000) + "\n...(内容过长已截断)";
+      return JSON.stringify(d);
+    }
+    case "list_branches":
+      return jr(await handleListBranches(env));
+    case "build_status":
+      return jr(await handleBuildStatus(env));
+    case "write_file":
+      return jr(await handleSaveFile(env, { path: s("path"), content: applySecrets(s("content"), secrets) }));
+    case "delete_file":
+      return JSON.stringify(await handleRecyclePaths(env, [s("path")]));
+    case "trigger_build":
+      return jr(await handleTriggerBuild(env));
+    case "get_settings": {
+      const allowGuest = (await getSiteSetting(db, "allow_guest_comment", "true")) !== "false";
+      const retention = await getSiteSetting(db, "retention_days", "365");
+      return JSON.stringify({ ok: true, allow_guest_comment: allowGuest, retention_days: retention });
+    }
+    case "set_setting": {
+      const key = s("key");
+      const allowed = ["allow_guest_comment", "retention_days"];
+      if (allowed.indexOf(key) < 0)
+        return JSON.stringify({ ok: false, error: "不支持的设置项：" + key + "（允许：" + allowed.join("、") + "）" });
+      await setSiteSetting(db, key, applySecrets(s("value"), secrets));
+      return JSON.stringify({ ok: true, key, message: "已更新" });
+    }
+    default:
+      return JSON.stringify({ ok: false, error: "未知工具：" + name });
+  }
+}
+
+// GET 工具定义与使用说明（前端据此发起带工具的对话）
+app.get("/admin/api/ai/tools", async (c) => {
+  if (!isAdmin(c.get("userInfo"))) return json({ error: "unauthorized" }, 401);
+  try {
+    return json({ ok: true, tools: AI_TOOLS, danger: AI_DANGER_TOOLS, hint: await aiToolsHint((c.env as Bindings).DB) });
+  } catch (e) {
+    return json({ ok: false, error: String(e) }, 500);
+  }
+});
+
+// POST 执行工具（管理员）：body {name, args}
+app.post("/admin/api/ai/tool", async (c) => {
+  if (!isAdmin(c.get("userInfo"))) return json({ error: "unauthorized" }, 401);
+  const body = (await c.req.json().catch(() => ({}))) as { name?: unknown; args?: unknown };
+  const name = String(body.name || "");
+  const args = (body.args && typeof body.args === "object" ? body.args : {}) as Record<string, unknown>;
+  if (!name) return json({ ok: false, error: "name required" }, 400);
+  try {
+    return json({ ok: true, name, result: await aiRunTool(c.env as Bindings, name, args) });
   } catch (e) {
     return json({ ok: false, error: String(e) }, 500);
   }

@@ -185,6 +185,17 @@ a{color:var(--accent);text-decoration:none}
 .ai-pick input{width:auto;margin:0}
 .ai-pick-n{max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ai-chat.side-off .ai-side{display:none}
+.ai-chat-title{font-size:14px;font-weight:600;max-width:46%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:text}
+.ai-recall{margin-left:8px;border:none;background:transparent;color:var(--muted);font-size:11px;cursor:pointer;padding:0}
+.ai-recall:hover{color:var(--accent);text-decoration:underline}
+.ai-tool-note{font-size:12px;color:var(--muted);border-left:2px solid var(--border);padding:4px 10px;margin:0;word-break:break-all;background:var(--hover)}
+.ai-tool-note.err{border-left-color:#dc2626}
+.ai-tool-tag{display:inline-block;font-size:11px;padding:0 6px;margin-right:6px;border:1px solid var(--border);border-radius:2px;color:var(--muted)}
+.ai-tool-call{font-size:12px;color:var(--muted);margin-top:6px;word-break:break-all}
+.ai-tool-inline{opacity:.8}
+.ai-tool-confirm{border:1px solid var(--accent);border-radius:2px;padding:10px 12px;background:var(--card)}
+.ai-tool-head{font-size:13px;font-weight:600;margin-bottom:6px}
+.ai-tool-pre{margin:0;max-height:200px;overflow:auto;font-size:12px;white-space:pre-wrap;word-break:break-all;background:var(--hover);padding:8px;border-radius:2px}
 @media(max-width:640px){.ai-chat{height:auto}.ai-side{position:absolute;top:0;left:0;bottom:0;width:min(78vw,260px);z-index:6}.ai-scroll{min-height:300px}}
 `;
 
@@ -272,7 +283,7 @@ function go(name){
     if(name==='visit') loadVisit();
     if(name==='subscribe') loadSubscribe();
     if(name==='ai') loadAiChat();
-    if(name==='settings'){ loadSubscribeSettings(); loadSiteSettings(); loadAiSettings(); }
+    if(name==='settings'){ loadSubscribeSettings(); loadSiteSettings(); loadAiSettings(); loadSecrets(); }
     window.scrollTo(0,0);
   }
   try{ history.replaceState(null,'','/admin/'+name); }catch(e){}
@@ -467,6 +478,7 @@ async function loadAiSettings(){
       const md = $('#aiModel'); if(md) md.value = d.model || '';
       const en = $('#aiEnabled'); if(en) en.checked = !!d.enabled;
       const cp = $('#aiClientProxy'); if(cp) cp.checked = !!d.clientProxy;
+      const pm = $('#aiPermission'); if(pm) pm.value = d.permission || 'safe';
       aiPicked = Array.isArray(d.models) ? d.models.slice() : [];
       renderAiModels();
       const pr = $('#aiPrompt'); if(pr) pr.value = d.prompt || '';
@@ -492,7 +504,8 @@ async function saveAiSettings(){
     models: picked,
     prompt: aiVal('aiPrompt'),
     enabled: !!(en && en.checked),
-    clientProxy: aiProxyOn()
+    clientProxy: aiProxyOn(),
+    permission: aiVal('aiPermission') || 'safe'
   };
   const r = await api('/admin/api/ai/settings', { method:'PUT', body: JSON.stringify(payload) });
   const msg = $('#aiMsg');
@@ -657,6 +670,11 @@ let aiStreaming = false;      // 是否正在流式接收
 let aiAbort = null;           // 中止控制器
 let aiChatProxy = false;      // 前端代理（取自设置中已保存的配置）
 let aiPrompt = '';            // AI 提示词（系统提示）
+let aiConvTitle = '';         // 当前会话标题（重命名后使用；为空时按首条用户消息生成）
+let aiPermission = 'safe';    // 权限级别：safe 安全访问 / important 重要确认 / all 全部确认 / full 完全访问
+let aiTools = null;           // 工具定义（权限非安全时加载）
+let aiToolsHint = '';         // 工具使用说明（含密钥占位符名称）
+let aiToolDanger = [];        // 危险工具名单
 
 async function loadAiChat(){
   // 进入页面：加载历史会话列表 + 模型下拉（可选模型）
@@ -667,6 +685,7 @@ async function loadAiChat(){
     const d = (r.ok && r.data) ? r.data : {};
     aiChatProxy = !!d.clientProxy;
     aiPrompt = String(d.prompt || '').trim();
+    aiPermission = d.permission || 'safe';
     const sel = $('#aiChatModel');
     if(sel){
       const list = (Array.isArray(d.models) && d.models.length) ? d.models : (d.model ? [d.model] : []);
@@ -682,6 +701,21 @@ async function loadAiChat(){
     }
     aiUpdateHint();
   }catch(e){}
+  aiLoadTools();
+}
+// 按权限加载工具定义与使用说明（安全访问不加载工具，AI 只能对话）
+async function aiLoadTools(){
+  aiTools = null; aiToolsHint = ''; aiToolDanger = [];
+  if(aiPermission === 'safe'){ aiUpdateHint(); return; }
+  try{
+    const r = await api('/admin/api/ai/tools');
+    if(r.ok && r.data){
+      aiTools = Array.isArray(r.data.tools) ? r.data.tools : [];
+      aiToolsHint = String(r.data.hint || '');
+      aiToolDanger = Array.isArray(r.data.danger) ? r.data.danger : [];
+    }
+  }catch(e){}
+  aiUpdateHint();
 }
 // 收起 / 展开会话侧边栏（手机端默认收起，从侧面滑出；选择会被记住）
 function aiSetSide(off){
@@ -704,7 +738,11 @@ function aiInitSide(){
 async function aiUpdateHint(){
   const hint = $('#aiChatHint'); if(!hint) return;
   const base = await resolveAiBase();
-  hint.textContent = base ? '' : '尚未配置 AI，请到「设置 → AI 设置」填写';
+  if(!base){ hint.textContent = '尚未配置 AI，请到「设置 → AI 设置」填写'; return; }
+  hint.textContent = '权限：' + aiPermissionLabel(aiPermission) + (aiPermission === 'safe' ? '（仅对话）' : '');
+}
+function aiPermissionLabel(p){
+  return p==='full' ? '完全访问' : p==='important' ? '重要确认' : p==='all' ? '全部确认' : '安全访问';
 }
 async function loadAiConversations(){
   const box = $('#aiConvList'); if(!box) return;
@@ -724,7 +762,8 @@ async function loadAiConversations(){
 }
 function aiNewChat(){
   if(aiStreaming){ toast('正在回复中，请稍候', true); return; }
-  aiConvId = null; aiConvMessages = [];
+  aiConvId = null; aiConvMessages = []; aiConvTitle = '';
+  aiSetTitle('');
   renderAiMessages();
   loadAiConversations();
   const i = $('#aiInput'); if(i) i.focus();
@@ -736,8 +775,30 @@ async function aiOpenConv(id){
   const c = r.data.conversation;
   aiConvId = c.id;
   aiConvMessages = Array.isArray(c.messages) ? c.messages : [];
+  aiConvTitle = c.title || '';
+  aiSetTitle(aiConvTitle);
   renderAiMessages();
   loadAiConversations();
+}
+// 顶部标题：空标题时回退到首条用户消息前 30 字
+function aiSetTitle(t){
+  const firstUser = aiConvMessages.find(m => m.role === 'user');
+  const show = (t || (firstUser ? firstUser.content.slice(0, 30) : '') || '新对话');
+  const el = $('#aiChatTitle');
+  if(el) el.textContent = show;
+}
+// 重命名当前对话（取首次用户消息作为默认名）
+function aiRenameConv(){
+  if(aiStreaming){ toast('正在回复中，请稍候', true); return; }
+  const firstUser = aiConvMessages.find(m => m.role === 'user');
+  const cur = aiConvTitle || (firstUser ? firstUser.content.slice(0, 30) : '新对话');
+  const t = prompt('重命名对话', cur);
+  if(t === null) return;
+  const nt = t.trim().slice(0, 100);
+  if(!nt) return;
+  aiConvTitle = nt;
+  aiSetTitle(nt);
+  aiSaveConversation();
 }
 async function aiDelConv(id){
   if(!confirm('确认删除该会话？')) return;
@@ -748,14 +809,48 @@ async function aiDelConv(id){
 function renderAiMessages(){
   const box = $('#aiCol'); if(!box) return;
   if(!aiConvMessages.length){ box.innerHTML = '<div class="empty">开始和 AI 对话吧</div>'; return; }
-  box.innerHTML = aiConvMessages.map(m => aiBubbleHtml(m.role, m.content)).join('');
+  box.innerHTML = aiConvMessages.map((m,i) => aiBubbleHtml(m.role, m.content, i, m)).join('');
   scrollAiBottom();
 }
-function aiBubbleHtml(role, content){
+// 撤回：删除该条及其之后的消息，并把该条内容放回输入框
+function aiRecall(i){
+  if(aiStreaming){ toast('正在回复中，请稍候', true); return; }
+  if(i < 0 || i >= aiConvMessages.length) return;
+  const m = aiConvMessages[i] || {};
+  if(!confirm('撤回这条及之后的消息？内容会回到输入框。')) return;
+  const text = (typeof m.content === 'string') ? m.content : '';
+  aiConvMessages = aiConvMessages.slice(0, i);
+  renderAiMessages();
+  aiSetTitle(aiConvTitle);
+  const inp = $('#aiInput'); if(inp){ inp.value = text; inp.focus(); }
+  aiSaveConversation();
+}
+function aiBubbleHtml(role, content, idx, m){
+  m = m || {};
+  // 工具执行结果：紧凑展示，不占用正文气泡
+  if(role === 'tool'){
+    const denied = !!m.denied;
+    const short = String(content == null ? '' : content).replace(/\\s+/g, ' ').slice(0, 200);
+    return '<div class="ai-tool-note'+(denied?' err':'')+'"><span class="ai-tool-tag">'+
+      (denied?'已拒绝':'工具结果')+'</span>'+esc(m.name || '')+(short ? '：' + esc(short) : '')+'</div>';
+  }
   const isUser = role === 'user';
+  const recall = (idx === undefined || idx === null) ? '' :
+    '<button class="ai-recall" title="撤回这条及之后的消息" onclick="aiRecall('+idx+')">撤回</button>';
+  let extra = '';
+  if(m.tool_calls && m.tool_calls.length){
+    extra = m.tool_calls.map(function(t){
+      const f = t.function || {};
+      return '<div class="ai-tool-call"><span class="ai-tool-tag">调用</span>'+esc(f.name)+
+        ' <span class="ai-tool-inline">'+esc(f.arguments || '')+'</span></div>';
+    }).join('');
+  }
+  const hasText = content !== undefined && content !== null && String(content) !== '';
   return '<div class="ai-msg '+(isUser?'user':'assistant')+'">'+
-    '<div class="ai-who">'+(isUser?'我':'AI')+'</div>'+
-    '<div class="ai-body">'+esc(content)+'</div></div>';
+    '<div class="ai-who">'+(isUser?'我':'AI')+recall+'</div>'+
+    (hasText ? '<div class="ai-body">'+esc(content)+'</div>' : '')+
+    extra +
+  '</div>';
 }
 function scrollAiBottom(){ const box = $('#aiMessages'); if(box) box.scrollTop = box.scrollHeight; }
 function aiStop(){ if(aiAbort){ try{ aiAbort.abort(); }catch(e){} } }
@@ -765,111 +860,233 @@ async function aiSend(){
   const input = $('#aiInput');
   const text = ((input && input.value) || '').trim();
   if(!text){ toast('请输入内容', true); return; }
-  const box = $('#aiCol');
   aiConvMessages.push({ role:'user', content:text });
   if(input) input.value = '';
-  if(box && box.querySelector('.empty')) box.innerHTML = '';
-  if(box) box.insertAdjacentHTML('beforeend', aiBubbleHtml('user', text));
-  if(box) box.insertAdjacentHTML('beforeend', '<div class="ai-msg assistant" id="aiCurAssistant"><div class="ai-who">AI</div><div class="ai-body"></div></div>');
-  const bodyEl = box ? box.querySelector('#aiCurAssistant .ai-body') : null;
-  scrollAiBottom();
-
+  aiSetTitle(aiConvTitle);
+  renderAiMessages();
+  await aiAgentLoop();
+}
+// 是否需要用户确认：full 不确认；important 仅危险操作确认；all/其他 全部确认
+function aiNeedConfirm(name){
+  if(aiPermission === 'full') return false;
+  if(aiPermission === 'important') return aiToolDanger.indexOf(name) >= 0;
+  return true;
+}
+async function aiAgentLoop(){
+  const modelEl = $('#aiChatModel');
+  const modelName = modelEl ? modelEl.value.trim() : '';
   aiStreaming = true;
   const sendBtn = $('#aiSendBtn'); if(sendBtn) sendBtn.disabled = true;
   const stopBtn = $('#aiStopBtn'); if(stopBtn) stopBtn.style.display = '';
   const msg = $('#aiChatMsg'); if(msg){ msg.className = 'msg'; msg.textContent = ''; }
   aiAbort = new AbortController();
-
-  const modelEl = $('#aiChatModel');
-  const modelName = modelEl ? modelEl.value.trim() : '';
-  // 系统提示词（AI 提示词）：仅在请求时附加，不写入历史
-  const reqMessages = aiPrompt ? [{ role:'system', content: aiPrompt }].concat(aiConvMessages) : aiConvMessages;
-  let acc = '';
-  let target = '/admin/api/ai/chat';
+  let rounds = 0, stopped = false, failed = false;
   try{
-    let resp;
-    if(aiChatProxyOn()){
-      // 前端代理：浏览器直连服务商（仅当服务商允许跨域 CORS 时可用）
-      const base = await resolveAiBase();
-      if(!base) throw new Error('前端代理需要 API 地址，请先在「设置 → AI 设置」填写 API 地址');
-      target = aiJoin(base, '/chat/completions');
-      const k = await resolveAiKey(aiVal('aiApiKey'));
-      resp = await fetch(target, {
-        method:'POST',
-        headers: Object.assign({'Content-Type':'application/json'}, k ? {Authorization:'Bearer ' + k} : {}),
-        signal: aiAbort.signal,
-        body: JSON.stringify({ messages: reqMessages, model: modelName, stream: true })
-      });
-    } else {
-      const headers = { 'Content-Type':'application/json' };
-      if(token) headers['Authorization'] = 'Bearer ' + token;
-      resp = await fetch('/admin/api/ai/chat', {
-        method:'POST',
-        headers: headers,
-        signal: aiAbort.signal,
-        body: JSON.stringify({ messages: reqMessages, model: modelName })
-      });
-    }
-    const ct = resp.headers.get('content-type') || '';
-    if(!resp.ok || ct.indexOf('application/json') >= 0){
-      const d = await resp.json().catch(()=>({}));
-      const em = d && d.error && (d.error.message || d.error);
-      throw new Error((typeof em === 'string' && em) || ('HTTP ' + resp.status));
-    }
-    const reader = resp.body.getReader();
-    const dec = new TextDecoder();
-    let buf = '';
-    while(true){
-      const chunk = await reader.read();
-      if(chunk.done) break;
-      buf += dec.decode(chunk.value, { stream:true });
-      let idx;
-      while((idx = buf.indexOf('\\n')) >= 0){
-        const line = buf.slice(0, idx).trim();
-        buf = buf.slice(idx + 1);
-        if(!line || line.indexOf('data:') !== 0) continue;
-        const payload = line.slice(5).trim();
-        if(payload === '[DONE]'){ buf = ''; break; }
-        try{
-          const j = JSON.parse(payload);
-          const delta = j.choices && j.choices[0] && j.choices[0].delta && j.choices[0].delta.content;
-          if(delta){ acc += delta; if(bodyEl){ bodyEl.textContent = acc; scrollAiBottom(); } }
-        }catch(e){ /* 忽略非 JSON 心跳行 */ }
+    while(rounds < 8){
+      rounds++;
+      renderAiMessages();
+      const box = $('#aiCol');
+      if(box) box.insertAdjacentHTML('beforeend', '<div class="ai-msg assistant"><div class="ai-who">AI</div><div class="ai-body" id="aiCurBody"></div></div>');
+      scrollAiBottom();
+      const bodyEl = box ? box.querySelector('#aiCurBody') : null;
+      let res;
+      try{
+        res = await aiStreamRound(modelName, bodyEl);
+      }catch(e){
+        if(e && e.name === 'AbortError'){ stopped = true; if(msg){ msg.className = 'msg'; msg.textContent = '已停止生成'; } break; }
+        failed = true;
+        const err = (e && e.message) ? e.message : String(e);
+        const hint = aiChatProxyOn() ? '（前端代理请求失败：服务商可能不允许跨域）' : '';
+        if(msg){ msg.className = 'msg err'; msg.textContent = '请求失败：' + err + hint; }
+        toast('请求失败：' + err, true);
+        break;
       }
+      if(res.toolCalls && res.toolCalls.length){
+        aiConvMessages.push({
+          role:'assistant',
+          content: res.content || '',
+          tool_calls: res.toolCalls.map(function(t){ return { id:t.id, type:'function', function:{ name:t.name, arguments:t.arguments } }; })
+        });
+        renderAiMessages();
+        for(let k=0; k<res.toolCalls.length; k++){
+          const t = res.toolCalls[k];
+          let args = {};
+          try{ args = JSON.parse(t.arguments || '{}'); }catch(e){ args = {}; }
+          let allow = true;
+          if(aiNeedConfirm(t.name)) allow = await aiAskConfirm(t.name, args);
+          let resultStr;
+          if(allow){
+            const rr = await api('/admin/api/ai/tool', { method:'POST', body: JSON.stringify({ name:t.name, args:args }) });
+            if(rr.ok && rr.data && rr.data.ok) resultStr = String(rr.data.result || '');
+            else resultStr = JSON.stringify({ ok:false, error:(rr.data && rr.data.error) || '执行失败' });
+          } else {
+            resultStr = JSON.stringify({ ok:false, error:'用户已拒绝执行该操作' });
+          }
+          aiConvMessages.push({ role:'tool', tool_call_id:t.id, name:t.name, content: resultStr, denied: !allow });
+        }
+        renderAiMessages();
+        continue;
+      }
+      aiConvMessages.push({ role:'assistant', content: res.content || '' });
+      renderAiMessages();
+      break;
     }
-  }catch(e){
-    if(e && e.name === 'AbortError'){
-      if(msg){ msg.className = 'msg'; msg.textContent = '已停止生成'; }
-    } else {
-      const err = (e && e.message) ? e.message : String(e);
-      const hint = aiChatProxyOn() ? '（前端代理请求失败：服务商可能不允许跨域）' : '';
-      if(msg){ msg.className = 'msg err'; msg.textContent = '请求失败：' + err + hint; }
-      toast('请求失败：' + err, true);
-    }
+    if(rounds >= 8 && !failed && !stopped) toast('已达到工具调用上限，可继续输入以推进', true);
   }finally{
     aiStreaming = false; aiAbort = null;
     if(sendBtn) sendBtn.disabled = false;
     if(stopBtn) stopBtn.style.display = 'none';
   }
-
-  if(acc){
-    aiConvMessages.push({ role:'assistant', content: acc });
-  } else {
-    const cur = $('#aiCurAssistant'); if(cur) cur.remove();
-  }
   await aiSaveConversation();
   scrollAiBottom();
 }
+// 流式请求一轮，返回 {content, toolCalls}
+async function aiStreamRound(modelName, bodyEl){
+  // 系统提示词（AI 提示词）+ 工具使用说明：仅在请求时附加，不写入历史
+  const sysParts = [];
+  if(aiPrompt) sysParts.push(aiPrompt);
+  if(aiToolsHint) sysParts.push(aiToolsHint);
+  const reqMessages = sysParts.length ? [{ role:'system', content: sysParts.join('\\n\\n') }].concat(aiConvMessages) : aiConvMessages;
+  const payload = { messages: reqMessages, model: modelName };
+  if(aiTools && aiTools.length){ payload.tools = aiTools; payload.tool_choice = 'auto'; }
+  let resp;
+  if(aiChatProxyOn()){
+    // 前端代理：浏览器直连服务商（仅当服务商允许跨域 CORS 时可用）
+    const base = await resolveAiBase();
+    if(!base) throw new Error('前端代理需要 API 地址，请先在「设置 → AI 设置」填写 API 地址');
+    const k = await resolveAiKey(aiVal('aiApiKey'));
+    payload.stream = true;
+    resp = await fetch(aiJoin(base, '/chat/completions'), {
+      method:'POST',
+      headers: Object.assign({'Content-Type':'application/json'}, k ? {Authorization:'Bearer ' + k} : {}),
+      signal: aiAbort.signal,
+      body: JSON.stringify(payload)
+    });
+  } else {
+    const headers = { 'Content-Type':'application/json' };
+    if(token) headers['Authorization'] = 'Bearer ' + token;
+    resp = await fetch('/admin/api/ai/chat', {
+      method:'POST',
+      headers: headers,
+      signal: aiAbort.signal,
+      body: JSON.stringify(payload)
+    });
+  }
+  const ct = resp.headers.get('content-type') || '';
+  if(!resp.ok || ct.indexOf('application/json') >= 0){
+    const d = await resp.json().catch(()=>({}));
+    const em = d && d.error && (d.error.message || d.error);
+    throw new Error((typeof em === 'string' && em) || ('HTTP ' + resp.status));
+  }
+  const reader = resp.body.getReader();
+  const dec = new TextDecoder();
+  let buf = '', acc = '';
+  const toolAcc = {};
+  while(true){
+    const chunk = await reader.read();
+    if(chunk.done) break;
+    buf += dec.decode(chunk.value, { stream:true });
+    let idx;
+    while((idx = buf.indexOf('\\n')) >= 0){
+      const line = buf.slice(0, idx).trim();
+      buf = buf.slice(idx + 1);
+      if(!line || line.indexOf('data:') !== 0) continue;
+      const pl = line.slice(5).trim();
+      if(pl === '[DONE]'){ buf = ''; break; }
+      let j;
+      try{ j = JSON.parse(pl); }catch(e){ continue; }
+      const delta = j.choices && j.choices[0] && j.choices[0].delta;
+      if(!delta) continue;
+      if(delta.content){ acc += delta.content; if(bodyEl){ bodyEl.textContent = acc; scrollAiBottom(); } }
+      if(delta.tool_calls && delta.tool_calls.length){
+        for(let ti=0; ti<delta.tool_calls.length; ti++){
+          const tc = delta.tool_calls[ti];
+          const key = (tc.index === undefined || tc.index === null) ? 0 : tc.index;
+          if(!toolAcc[key]) toolAcc[key] = { id:'', name:'', args:'' };
+          if(tc.id) toolAcc[key].id = tc.id;
+          if(tc.function){
+            if(tc.function.name) toolAcc[key].name = tc.function.name;
+            if(tc.function.arguments) toolAcc[key].args += tc.function.arguments;
+          }
+        }
+      }
+    }
+  }
+  const keys = Object.keys(toolAcc).sort(function(a,b){ return (+a) - (+b); });
+  const toolCalls = keys.map(function(k){
+    const t = toolAcc[k];
+    return { id: t.id || ('call_' + k), name: t.name, arguments: t.args || '{}' };
+  }).filter(function(t){ return !!t.name; });
+  return { content: acc, toolCalls: toolCalls };
+}
+// 危险操作确认卡片（返回 Promise：允许=true / 拒绝=false）
+function aiAskConfirm(name, args){
+  return new Promise(function(resolve){
+    const box = $('#aiCol');
+    if(!box){ resolve(false); return; }
+    let argTxt = '';
+    try{ argTxt = JSON.stringify(args, null, 2); }catch(e){ argTxt = String(args); }
+    const div = document.createElement('div');
+    div.className = 'ai-tool-confirm';
+    div.innerHTML = '<div class="ai-tool-head">需要确认：' + esc(name) + '</div>'+
+      '<pre class="ai-tool-pre">' + esc(argTxt) + '</pre>'+
+      '<div class="filters" style="margin:8px 0 0">'+
+        '<button class="wk-btn sm" data-yes>允许执行</button>'+
+        '<button class="wk-btn ghost sm" data-no>拒绝</button>'+
+      '</div>';
+    box.appendChild(div);
+    scrollAiBottom();
+    div.querySelector('[data-yes]').onclick = function(){ div.remove(); resolve(true); };
+    div.querySelector('[data-no]').onclick = function(){ div.remove(); resolve(false); };
+  });
+}
 
 async function aiSaveConversation(){
-  if(!aiConvMessages.length) return;
+  if(!aiConvMessages.length && !aiConvId) return;
   const firstUser = aiConvMessages.find(m => m.role === 'user');
-  const title = firstUser ? firstUser.content.slice(0, 30) : '新对话';
+  const title = (aiConvTitle || (firstUser ? firstUser.content.slice(0, 30) : '新对话')).slice(0, 100);
   const r = await api('/admin/api/ai/conversation', {
     method:'PUT',
     body: JSON.stringify({ id: aiConvId, title: title, messages: aiConvMessages })
   });
   if(r.ok && r.data && r.data.id){ aiConvId = r.data.id; loadAiConversations(); }
+}
+
+// ---------- AI 密钥（占位符 {name}，仅存名称，值不下发）----------
+async function loadSecrets(){
+  const box = $('#secList'); if(!box) return;
+  try{
+    const r = await api('/admin/api/secrets');
+    const names = (r.ok && r.data && Array.isArray(r.data.names)) ? r.data.names : [];
+    if(!names.length){ box.innerHTML = '<div class="empty">暂无密钥</div>'; return; }
+    box.innerHTML = names.map(function(n){
+      return '<div class="ai-conv" style="cursor:default"><span class="ai-conv-t">{'+esc(n)+'}</span>'+
+        '<button class="wk-btn ghost sm" onclick="delSecret(\\''+esc(n)+'\\')">删</button></div>';
+    }).join('');
+  }catch(e){ box.innerHTML = '<div class="empty">加载失败</div>'; }
+}
+async function saveSecret(){
+  const msg = $('#secMsg');
+  const name = aiVal('secName').trim();
+  const value = aiVal('secValue');
+  if(!name){ toast('请填写名称', true); return; }
+  if(!value){ toast('请填写密钥值', true); return; }
+  const r = await api('/admin/api/secrets', { method:'PUT', body: JSON.stringify({ name:name, value:value }) });
+  const err = (r.data && r.data.error) || '保存失败';
+  if(r.ok){
+    toast('密钥已保存');
+    if(msg){ msg.className='msg ok'; msg.textContent='密钥已保存（AI 只能看到占位符 {' + name + '}）'; }
+    const v = $('#secValue'); if(v) v.value='';
+    loadSecrets();
+  } else {
+    toast(err, true);
+    if(msg){ msg.className='msg err'; msg.textContent=err; }
+  }
+}
+async function delSecret(name){
+  if(!confirm('确认删除密钥 {' + name + '} ？')) return;
+  const r = await api('/admin/api/secrets?name=' + encodeURIComponent(name), { method:'DELETE' });
+  if(r.ok){ toast('已删除'); loadSecrets(); } else toast('删除失败', true);
 }
 
 // ---------- 订阅管理（SMTP 配置 + 订阅者 + 群发）----------
@@ -1989,6 +2206,8 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
       <div class="ai-main">
         <div class="ai-bar">
           <button class="wk-btn ghost sm" id="aiSideToggle" onclick="aiToggleSide()" title="展开侧边栏" style="display:none">› 会话</button>
+          <span class="ai-chat-title" id="aiChatTitle" title="双击可重命名" ondblclick="aiRenameConv()">新对话</span>
+          <button class="wk-btn ghost sm" onclick="aiRenameConv()" title="重命名对话">改名</button>
           <div style="flex:1"></div>
           <span class="wk-label" id="aiChatHint" style="margin:0"></span>
           <button class="wk-btn ghost sm" id="aiStopBtn" style="display:none" onclick="aiStop()">停止</button>
@@ -2127,6 +2346,13 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
         <label class="wk-label" style="display:flex;align-items:center;gap:6px;margin-top:6px;cursor:pointer">
           <input type="checkbox" id="aiClientProxy" style="width:auto"> 前端代理：由浏览器直连服务商
         </label>
+        <label class="wk-label" style="margin-top:14px">权限级别（AI 可执行的操作范围）</label>
+        <select class="wk-input" id="aiPermission">
+          <option value="safe">安全访问 · 仅对话，不执行任何操作</option>
+          <option value="important">重要确认 · 危险操作需确认（写文件 / 删除 / 部署 / 改设置）</option>
+          <option value="all">全部确认 · 每次工具调用都需确认</option>
+          <option value="full">完全访问 · 无需确认，直接执行</option>
+        </select>
         <div class="filters" style="margin:14px 0 0">
           <button class="wk-btn sm" onclick="saveAiSettings()">保存配置</button>
           <button class="wk-btn ghost sm" onclick="testAiSettings()">测试连通性</button>
@@ -2153,6 +2379,29 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
             <textarea class="wk-input" id="aiPrompt" rows="5" placeholder="例如：你是一个简洁的中文技术助手，回答尽量给要点。"></textarea>
           </div>
         </details>
+      </div>
+    </details>
+
+    <details class="wk-collapse">
+      <summary>AI 密钥（占位符，安全）</summary>
+      <div class="wk-collapse-body">
+        <p class="wk-label" style="margin-top:0">在此保存密钥（如第三方 API Key）。密钥值仅保存在服务端，<b>绝不会下发给 AI，也不会写进提示词</b>。AI 在写入文件或设置时使用占位符 <code>{名称}</code>，执行时会自动替换为真实值。</p>
+        <div class="wk-row">
+          <div style="flex:1">
+            <label class="wk-label">名称（用于占位符，如 MY_API）</label>
+            <input class="wk-input" id="secName" placeholder="MY_API">
+          </div>
+          <div style="flex:2">
+            <label class="wk-label">密钥值</label>
+            <input class="wk-input" id="secValue" type="password" placeholder="粘贴密钥值">
+          </div>
+        </div>
+        <div class="filters" style="margin:14px 0 0">
+          <button class="wk-btn sm" onclick="saveSecret()">保存密钥</button>
+          <button class="wk-btn ghost sm" onclick="loadSecrets()">刷新列表</button>
+        </div>
+        <div class="msg" id="secMsg"></div>
+        <div id="secList" style="margin-top:10px"><div class="empty">加载中...</div></div>
       </div>
     </details>
 
