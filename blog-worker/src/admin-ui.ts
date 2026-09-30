@@ -56,6 +56,8 @@ a{color:var(--accent);text-decoration:none}
 .wk-collapse[open]>summary::after{transform:rotate(180deg)}
 .wk-collapse>summary:hover{background:var(--hover)}
 .wk-collapse .wk-collapse-body{padding:2px 16px 16px;border-top:1px solid var(--border)}
+.wk-api-h{font-size:12px;font-weight:600;color:var(--fg);margin:14px 0 6px;padding-left:6px;border-left:2px solid var(--accent)}
+.wk-api-h:first-child{margin-top:0}
 /* 表单 */
 .wk-label{font-size:12px;color:var(--muted);margin:8px 0 4px;display:block}
 .wk-input{width:100%;border:1px solid var(--border);border-radius:3px;padding:6px 10px;font-size:13px;font-family:inherit;outline:none;background:var(--input-bg);color:var(--fg)}
@@ -155,7 +157,8 @@ a{color:var(--accent);text-decoration:none}
 @media(prefers-color-scheme:dark){.wk-badge.success{color:#4ade80;background:rgba(74,222,128,.12)}.wk-badge.fail{color:#f87171;background:rgba(248,113,113,.12)}.wk-badge.running{color:#fbbf24;background:rgba(251,191,36,.12)}}
 
 /* AI 助手（聊天）：扁平风格，方形直角，贴合后台原有样式 */
-.ai-chat{position:relative;display:flex;gap:0;padding:0;height:calc(100vh - 190px);min-height:420px;overflow:hidden}
+.ai-chat{position:relative;display:flex;gap:0;padding:0;height:calc(100vh - 128px);min-height:420px;overflow:hidden}
+.ai-chat.ai-full{position:fixed;inset:0;width:100vw;height:100vh;min-height:0;margin:0;z-index:200;border:none;border-radius:0}
 .ai-side{width:216px;flex-shrink:0;display:flex;flex-direction:column;min-width:0;border-right:1px solid var(--border);padding:12px;background:var(--hover);overflow:hidden;transition:width .26s ease,padding .26s ease,border-right-width .26s ease}
 .ai-side-head{display:flex;align-items:center;gap:6px;margin-bottom:4px}
 .ai-side-title{font-size:11px;color:var(--muted);margin:14px 0 6px;letter-spacing:.06em}
@@ -175,8 +178,32 @@ a{color:var(--accent);text-decoration:none}
 .ai-body{white-space:pre-wrap;word-break:break-word;line-height:1.7;font-size:14px;border-radius:2px}
 .ai-msg.assistant .ai-body{background:transparent;border:none;padding:0}
 .ai-msg.user .ai-body{max-width:82%;padding:8px 12px;background:var(--hover);border:1px solid var(--border)}
+/* Markdown 渲染 */
+.ai-body.md{white-space:normal}
+.ai-body.md>*:first-child{margin-top:0}
+.ai-body.md p{margin:0 0 8px}
+.ai-body.md p:last-child{margin-bottom:0}
+.ai-body.md ul,.ai-body.md ol{margin:0 0 8px;padding-left:22px}
+.ai-body.md li{margin:2px 0}
+.ai-body.md h1,.ai-body.md h2,.ai-body.md h3,.ai-body.md h4,.ai-body.md h5,.ai-body.md h6{margin:12px 0 6px;line-height:1.4;font-size:15px}
+.ai-body.md h1{font-size:18px}
+.ai-body.md h2{font-size:16px}
+.ai-body.md code{background:var(--hover);border:1px solid var(--border);padding:0 4px;border-radius:2px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px}
+.ai-body.md pre.md-pre{background:var(--hover);border:1px solid var(--border);border-radius:2px;padding:8px 10px;overflow:auto;margin:0 0 8px}
+.ai-body.md pre.md-pre code{background:transparent;border:none;padding:0}
+.ai-body.md blockquote{margin:0 0 8px;padding:2px 10px;border-left:2px solid var(--border);color:var(--muted)}
+.ai-body.md hr{border:none;border-top:1px solid var(--border);margin:10px 0}
+/* 思考过程（可展开/收起） */
+.ai-think{border:1px dashed var(--border);border-radius:2px;padding:6px 10px;margin:0 0 8px;font-size:12.5px;color:var(--muted);background:var(--hover)}
+.ai-think>summary{cursor:pointer;font-size:12px;color:var(--muted);outline:none}
+.ai-think-body{margin-top:6px;white-space:pre-wrap;word-break:break-word;line-height:1.7}
+/* 批量工具调用：默认折叠，可展开 */
+.ai-tools-fold{border:1px solid var(--border);border-radius:2px;background:var(--hover);margin:4px 0}
+.ai-tools-fold>summary{cursor:pointer;font-size:12px;color:var(--muted);padding:6px 10px;outline:none}
+.ai-tools-fold>summary:hover{color:var(--fg)}
+.ai-tools-fold>div{padding:0 10px 8px}
 .ai-input{display:flex;gap:8px;align-items:flex-end;padding:8px 14px 12px;flex-shrink:0}
-.ai-input textarea{flex:1;resize:vertical;min-height:52px;border-radius:2px}
+.ai-input textarea{flex:1;resize:vertical;min-height:34px;border-radius:2px}
 .ai-foot{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:10px 14px 0;border-top:1px solid var(--border);flex-shrink:0}
 .ai-model-list{max-height:240px;overflow:auto;display:flex;flex-wrap:wrap;gap:6px;align-content:flex-start}
 .ai-pick{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--border);border-radius:2px;padding:3px 8px;font-size:12px;cursor:pointer;background:var(--input-bg)}
@@ -482,7 +509,7 @@ async function loadAiSettings(){
       const pm = $('#aiPermission'); if(pm) pm.value = d.permission || 'safe';
       aiPicked = Array.isArray(d.models) ? d.models.slice() : [];
       renderAiModels();
-      const pr = $('#aiPrompt'); if(pr) pr.value = d.prompt || '';
+      const pr = $('#aiPrompt'); if(pr) pr.value = d.prompt || d.defaultPrompt || '';
       const k = $('#aiApiKey');
       if(k){ k.value = ''; k.placeholder = d.hasKey ? '已保存（留空表示不修改）' : '未设置'; }
     }
@@ -671,6 +698,8 @@ let aiStreaming = false;      // 是否正在流式接收
 let aiAbort = null;           // 中止控制器
 let aiChatProxy = false;      // 前端代理（取自设置中已保存的配置）
 let aiPrompt = '';            // AI 提示词（系统提示）
+let aiPromptDefault = '';     // 内置默认系统提示词（「还原默认」用）
+let aiThink = false;          // 思考模式：显示并保留模型的思考过程
 let aiConvTitle = '';         // 当前会话标题（重命名后使用；为空时按首条用户消息生成）
 let aiPermission = 'safe';    // 权限级别：safe 安全访问 / important 重要确认 / all 全部确认 / full 完全访问
 let aiTools = null;           // 工具定义（权限非安全时加载）
@@ -681,11 +710,13 @@ async function loadAiChat(){
   // 进入页面：加载历史会话列表 + 模型下拉（可选模型）
   loadAiConversations();
   aiInitSide();
+  aiLoadPrefs();
   try{
     const r = await api('/admin/api/ai/settings');
     const d = (r.ok && r.data) ? r.data : {};
     aiChatProxy = !!d.clientProxy;
-    aiPrompt = String(d.prompt || '').trim();
+    aiPromptDefault = String(d.defaultPrompt || '').trim();
+    aiPrompt = String(d.prompt || '').trim() || aiPromptDefault;
     aiPermission = d.permission || 'safe';
     const pm = $('#aiChatPermission'); if(pm) pm.value = aiPermission;
     const sel = $('#aiChatModel');
@@ -749,6 +780,45 @@ async function aiSetPermission(v){
   aiLoadTools();
   try{ await api('/admin/api/ai/settings', { method:'PUT', body: JSON.stringify({ permission: aiPermission }) }); }catch(e){}
 }
+// 读取本地偏好：思考模式、全屏
+function aiLoadPrefs(){
+  try{ aiThink = localStorage.getItem('aiThink') === '1'; }catch(e){}
+  const ck = $('#aiChatThink'); if(ck) ck.checked = aiThink;
+  try{ if(localStorage.getItem('aiFull') === '1') aiSetFull(true); }catch(e){}
+}
+function aiSetThink(on){
+  aiThink = !!on;
+  const ck = $('#aiChatThink'); if(ck && ck.checked !== aiThink) ck.checked = aiThink;
+  try{ localStorage.setItem('aiThink', aiThink ? '1' : '0'); }catch(e){}
+}
+function aiSetFull(on){
+  const el = document.querySelector('.ai-chat'); if(!el) return;
+  el.classList.toggle('ai-full', !!on);
+  const b = $('#aiFullBtn'); if(b) b.textContent = on ? '退出全屏' : '全屏';
+}
+function aiToggleFull(){
+  const el = document.querySelector('.ai-chat'); if(!el) return;
+  const on = !el.classList.contains('ai-full');
+  aiSetFull(on);
+  try{ localStorage.setItem('aiFull', on ? '1' : '0'); }catch(e){}
+  scrollAiBottom();
+}
+// 保存系统提示词（立即生效，改动过大可能导致 AI 不好用）
+async function aiSavePrompt(){
+  const ta = $('#aiPrompt'); if(!ta) return;
+  if(!confirm('保存后立即生效。\\n\\n系统提示词会直接影响 AI 的工具调用与回答方式，改动不当可能导致 AI 无法正常使用，请确认保存。')) return;
+  const r = await api('/admin/api/ai/settings', { method:'PUT', body: JSON.stringify({ prompt: ta.value }) });
+  if(r.ok && r.data){
+    aiPrompt = String(r.data.prompt || '').trim() || aiPromptDefault;
+    toast('系统提示词已保存');
+  } else toast('保存失败', true);
+}
+// 还原为内置默认提示词（需再点「保存」才生效）
+function aiResetPrompt(){
+  const ta = $('#aiPrompt'); if(!ta) return;
+  if(!confirm('还原为内置默认系统提示词？还原后需点「保存」才会生效。')) return;
+  ta.value = aiPromptDefault || '';
+}
 async function loadAiConversations(){
   const box = $('#aiConvList'); if(!box) return;
   try{
@@ -811,10 +881,90 @@ async function aiDelConv(id){
   if(r.ok){ if(aiConvId === id) aiNewChat(); else loadAiConversations(); }
   else toast('删除失败', true);
 }
+// ===== 轻量 Markdown 渲染（先转义再转换，防 XSS）=====
+function mdInline(s){
+  s = s.replace(/\`([^\`]+)\`/g, '<code>$1</code>');
+  s = s.replace(/\\*\\*([^*]+)\\*\\*/g, '<strong>$1</strong>');
+  s = s.replace(/(^|[^*])\\*([^*]+)\\*/g, '$1<em>$2</em>');
+  s = s.replace(/~~([^~]+)~~/g, '<del>$1</del>');
+  s = s.replace(/\\[([^\\]]+)\\]\\((https?:\\/\\/[^)\\s]+)\\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+  return s;
+}
+function mdToHtml(src){
+  const lines = String(src == null ? '' : src).replace(/\\r\\n?/g, '\\n').split('\\n');
+  let out = '', list = null, i = 0;
+  function closeList(){ if(list){ out += (list === 'ul' ? '</ul>' : '</ol>'); list = null; } }
+  while(i < lines.length){
+    const line = lines[i];
+    // 代码块
+    if(/^\\s*\`\`\`/.test(line)){
+      closeList();
+      const buf = []; i++;
+      while(i < lines.length && !/^\\s*\`\`\`/.test(lines[i])){ buf.push(lines[i]); i++; }
+      i++;
+      out += '<pre class="md-pre"><code>' + esc(buf.join('\\n')) + '</code></pre>';
+      continue;
+    }
+    if(!line.trim()){ closeList(); i++; continue; }
+    // 标题
+    let m = line.match(/^(#{1,6})\\s+(.*)$/);
+    if(m){ closeList(); const lv = m[1].length; out += '<h' + lv + '>' + mdInline(esc(m[2])) + '</h' + lv + '>'; i++; continue; }
+    // 分割线
+    if(/^\\s*([-*_])\\1{2,}\\s*$/.test(line)){ closeList(); out += '<hr>'; i++; continue; }
+    // 引用
+    if(/^\\s*>\\s?/.test(line)){
+      closeList();
+      const buf = [];
+      while(i < lines.length && /^\\s*>\\s?/.test(lines[i])){ buf.push(lines[i].replace(/^\\s*>\\s?/, '')); i++; }
+      out += '<blockquote>' + mdInline(esc(buf.join('\\n'))).replace(/\\n/g, '<br>') + '</blockquote>';
+      continue;
+    }
+    // 列表
+    const ul = line.match(/^\\s*[-*+]\\s+(.*)$/);
+    const ol = line.match(/^\\s*\\d+[.)]\\s+(.*)$/);
+    if(ul || ol){
+      const want = ul ? 'ul' : 'ol';
+      if(list !== want){ closeList(); out += want === 'ul' ? '<ul>' : '<ol>'; list = want; }
+      out += '<li>' + mdInline(esc((ul || ol)[1])) + '</li>';
+      i++; continue;
+    }
+    // 段落
+    closeList();
+    const buf = [line]; i++;
+    while(i < lines.length && lines[i].trim() && !/^\\s*(#{1,6}\\s|>|[-*+]\\s|\\d+[.)]\\s|\`\`\`)/.test(lines[i])){ buf.push(lines[i]); i++; }
+    out += '<p>' + mdInline(esc(buf.join('\\n'))).replace(/\\n/g, '<br>') + '</p>';
+  }
+  closeList();
+  return out;
+}
+// 工具结果：紧凑展示
+function aiToolNoteHtml(m){
+  const denied = !!(m && m.denied);
+  const short = String((m && m.content) == null ? '' : m.content).replace(/\\s+/g, ' ').slice(0, 200);
+  return '<div class="ai-tool-note'+(denied?' err':'')+'"><span class="ai-tool-tag">'+
+    (denied?'已拒绝':'工具结果')+'</span>'+esc((m && m.name) || '')+(short ? '：' + esc(short) : '')+'</div>';
+}
 function renderAiMessages(){
   const box = $('#aiCol'); if(!box) return;
   if(!aiConvMessages.length){ box.innerHTML = '<div class="empty">开始和 AI 对话吧</div>'; return; }
-  box.innerHTML = aiConvMessages.map((m,i) => aiBubbleHtml(m.role, m.content, i, m)).join('');
+  let html = '';
+  for(let i = 0; i < aiConvMessages.length; i++){
+    const m = aiConvMessages[i] || {};
+    // 连续的工具结果合并为一个可折叠块（批量调用时默认收起）
+    if(m.role === 'tool'){
+      const group = [];
+      while(i < aiConvMessages.length && aiConvMessages[i] && aiConvMessages[i].role === 'tool'){ group.push(aiConvMessages[i]); i++; }
+      i--;
+      const inner = group.map(aiToolNoteHtml).join('');
+      const denied = group.some(function(g){ return g && g.denied; });
+      html += group.length > 1
+        ? '<details class="ai-tools-fold"><summary>工具结果（'+group.length+(denied?' · 含被拒绝':'')+'）</summary><div>'+inner+'</div></details>'
+        : inner;
+      continue;
+    }
+    html += aiBubbleHtml(m.role, m.content, i, m);
+  }
+  box.innerHTML = html;
   scrollAiBottom();
 }
 // 撤回：删除该条及其之后的消息，并把该条内容放回输入框
@@ -832,28 +982,31 @@ function aiRecall(i){
 }
 function aiBubbleHtml(role, content, idx, m){
   m = m || {};
-  // 工具执行结果：紧凑展示，不占用正文气泡
-  if(role === 'tool'){
-    const denied = !!m.denied;
-    const short = String(content == null ? '' : content).replace(/\\s+/g, ' ').slice(0, 200);
-    return '<div class="ai-tool-note'+(denied?' err':'')+'"><span class="ai-tool-tag">'+
-      (denied?'已拒绝':'工具结果')+'</span>'+esc(m.name || '')+(short ? '：' + esc(short) : '')+'</div>';
-  }
+  if(role === 'tool') return aiToolNoteHtml(m);
   const isUser = role === 'user';
   const recall = (idx === undefined || idx === null) ? '' :
     '<button class="ai-recall" title="撤回这条及之后的消息" onclick="aiRecall('+idx+')">撤回</button>';
+  // 工具调用：批量时折叠，可展开
   let extra = '';
   if(m.tool_calls && m.tool_calls.length){
-    extra = m.tool_calls.map(function(t){
+    const items = m.tool_calls.map(function(t){
       const f = t.function || {};
       return '<div class="ai-tool-call"><span class="ai-tool-tag">调用</span>'+esc(f.name)+
         ' <span class="ai-tool-inline">'+esc(f.arguments || '')+'</span></div>';
     }).join('');
+    extra = m.tool_calls.length > 1
+      ? '<details class="ai-tools-fold"><summary>调用 '+m.tool_calls.length+' 个工具</summary><div>'+items+'</div></details>'
+      : items;
   }
+  // 思考过程（思考模式下保留）：可展开 / 收起
+  const think = (!isUser && m.reasoning)
+    ? '<details class="ai-think"><summary>思考过程</summary><div class="ai-think-body">'+esc(m.reasoning)+'</div></details>'
+    : '';
   const hasText = content !== undefined && content !== null && String(content) !== '';
   return '<div class="ai-msg '+(isUser?'user':'assistant')+'">'+
     '<div class="ai-who">'+(isUser?'我':'AI')+recall+'</div>'+
-    (hasText ? '<div class="ai-body">'+esc(content)+'</div>' : '')+
+    think +
+    (hasText ? '<div class="ai-body'+(isUser?'':' md')+'">'+(isUser?esc(content):mdToHtml(content))+'</div>' : '')+
     extra +
   '</div>';
 }
@@ -891,12 +1044,15 @@ async function aiAgentLoop(){
       rounds++;
       renderAiMessages();
       const box = $('#aiCol');
-      if(box) box.insertAdjacentHTML('beforeend', '<div class="ai-msg assistant"><div class="ai-who">AI</div><div class="ai-body" id="aiCurBody"></div></div>');
+      if(box) box.insertAdjacentHTML('beforeend', '<div class="ai-msg assistant"><div class="ai-who">AI</div>'+
+        (aiThink ? '<details class="ai-think" id="aiCurThink" open><summary>思考中…</summary><div class="ai-think-body"></div></details>' : '')+
+        '<div class="ai-body md" id="aiCurBody"></div></div>');
       scrollAiBottom();
       const bodyEl = box ? box.querySelector('#aiCurBody') : null;
+      const thinkEl = box ? box.querySelector('#aiCurThink') : null;
       let res;
       try{
-        res = await aiStreamRound(modelName, bodyEl);
+        res = await aiStreamRound(modelName, { bodyEl: bodyEl, thinkEl: thinkEl });
       }catch(e){
         if(e && e.name === 'AbortError'){ stopped = true; if(msg){ msg.className = 'msg'; msg.textContent = '已停止生成'; } break; }
         failed = true;
@@ -907,11 +1063,13 @@ async function aiAgentLoop(){
         break;
       }
       if(res.toolCalls && res.toolCalls.length){
-        aiConvMessages.push({
+        const am = {
           role:'assistant',
           content: res.content || '',
           tool_calls: res.toolCalls.map(function(t){ return { id:t.id, type:'function', function:{ name:t.name, arguments:t.arguments } }; })
-        });
+        };
+        if(aiThink && res.reasoning) am.reasoning = res.reasoning;
+        aiConvMessages.push(am);
         renderAiMessages();
         for(let k=0; k<res.toolCalls.length; k++){
           const t = res.toolCalls[k];
@@ -932,7 +1090,9 @@ async function aiAgentLoop(){
         renderAiMessages();
         continue;
       }
-      aiConvMessages.push({ role:'assistant', content: res.content || '' });
+      const fm = { role:'assistant', content: res.content || '' };
+      if(aiThink && res.reasoning) fm.reasoning = res.reasoning;
+      aiConvMessages.push(fm);
       renderAiMessages();
       break;
     }
@@ -945,13 +1105,21 @@ async function aiAgentLoop(){
   await aiSaveConversation();
   scrollAiBottom();
 }
-// 流式请求一轮，返回 {content, toolCalls}
-async function aiStreamRound(modelName, bodyEl){
+// 清理历史消息：去掉仅供前端展示的字段，避免上游接口报错
+function aiCleanMsg(m){
+  if(!m || (m.reasoning === undefined && m.denied === undefined)) return m;
+  const c = {};
+  for(const k in m){ if(k !== 'reasoning' && k !== 'denied') c[k] = m[k]; }
+  return c;
+}
+// 流式请求一轮，返回 {content, toolCalls, reasoning}
+async function aiStreamRound(modelName, ui){
   // 系统提示词（AI 提示词）+ 工具使用说明：仅在请求时附加，不写入历史
   const sysParts = [];
   if(aiPrompt) sysParts.push(aiPrompt);
   if(aiToolsHint) sysParts.push(aiToolsHint);
-  const reqMessages = sysParts.length ? [{ role:'system', content: sysParts.join('\\n\\n') }].concat(aiConvMessages) : aiConvMessages;
+  const hist = aiConvMessages.map(aiCleanMsg);
+  const reqMessages = sysParts.length ? [{ role:'system', content: sysParts.join('\\n\\n') }].concat(hist) : hist;
   const payload = { messages: reqMessages, model: modelName };
   if(aiTools && aiTools.length){ payload.tools = aiTools; payload.tool_choice = 'auto'; }
   let resp;
@@ -985,7 +1153,7 @@ async function aiStreamRound(modelName, bodyEl){
   }
   const reader = resp.body.getReader();
   const dec = new TextDecoder();
-  let buf = '', acc = '';
+  let buf = '', acc = '', reasonAcc = '', lastPaint = 0;
   const toolAcc = {};
   while(true){
     const chunk = await reader.read();
@@ -1002,7 +1170,19 @@ async function aiStreamRound(modelName, bodyEl){
       try{ j = JSON.parse(pl); }catch(e){ continue; }
       const delta = j.choices && j.choices[0] && j.choices[0].delta;
       if(!delta) continue;
-      if(delta.content){ acc += delta.content; if(bodyEl){ bodyEl.textContent = acc; scrollAiBottom(); } }
+      // 思考模式：保留模型返回的推理内容（reasoning_content / reasoning）
+      if(aiThink){
+        const rc = delta.reasoning_content || delta.reasoning;
+        if(rc){
+          reasonAcc += rc;
+          if(ui && ui.thinkEl){ ui.thinkEl.style.display = ''; const b = ui.thinkEl.querySelector('.ai-think-body'); if(b) b.textContent = reasonAcc; }
+        }
+      }
+      if(delta.content){
+        acc += delta.content;
+        const now = Date.now();
+        if(ui && ui.bodyEl && (now - lastPaint > 80)){ lastPaint = now; ui.bodyEl.innerHTML = mdToHtml(acc); scrollAiBottom(); }
+      }
       if(delta.tool_calls && delta.tool_calls.length){
         for(let ti=0; ti<delta.tool_calls.length; ti++){
           const tc = delta.tool_calls[ti];
@@ -1022,7 +1202,11 @@ async function aiStreamRound(modelName, bodyEl){
     const t = toolAcc[k];
     return { id: t.id || ('call_' + k), name: t.name, arguments: t.args || '{}' };
   }).filter(function(t){ return !!t.name; });
-  return { content: acc, toolCalls: toolCalls };
+  // 收尾：把流式内容按 Markdown 完整渲染一次
+  if(ui && ui.bodyEl) ui.bodyEl.innerHTML = mdToHtml(acc);
+  if(aiThink && ui && ui.thinkEl && !reasonAcc) ui.thinkEl.style.display = 'none';
+  scrollAiBottom();
+  return { content: acc, toolCalls: toolCalls, reasoning: reasonAcc };
 }
 // 危险操作确认卡片（返回 Promise：允许=true / 拒绝=false）
 function aiAskConfirm(name, args){
@@ -2217,6 +2401,7 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
           </button>
           <div style="flex:1"></div>
           <span class="wk-label" id="aiChatHint" style="margin:0"></span>
+          <button class="wk-btn ghost sm" id="aiFullBtn" onclick="aiToggleFull()" title="全屏 / 退出全屏">全屏</button>
           <button class="wk-btn ghost sm" id="aiStopBtn" style="display:none" onclick="aiStop()">停止</button>
         </div>
         <div id="aiMessages" class="ai-scroll"><div class="ai-col" id="aiCol"><div class="empty">开始和 AI 对话吧</div></div></div>
@@ -2231,6 +2416,9 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
             <option value="all">全部确认 · 每步都确认</option>
             <option value="full">完全访问 · 无需确认</option>
           </select>
+          <label class="wk-label" style="margin:0;display:inline-flex;align-items:center;gap:5px;cursor:pointer" title="显示并保留模型的思考过程（需所选模型支持推理，如 deepseek-reasoner）">
+            <input type="checkbox" id="aiChatThink" onchange="aiSetThink(this.checked)"> 思考模式
+          </label>
         </div>
         <div class="ai-input">
           <textarea class="wk-input" id="aiInput" rows="3" placeholder="输入文字"></textarea>
@@ -2387,41 +2575,45 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
           </div>
         </details>
         <details class="wk-collapse" style="margin-top:12px;background:transparent;border:1px solid var(--border)">
-          <summary>AI 提示词编辑</summary>
+          <summary>系统提示词（AI 提示词）</summary>
           <div class="wk-collapse-body" style="border-top:1px solid var(--border)">
-            <p class="wk-label" style="margin-top:0">作为系统消息随每次对话发送，用于设定助手的角色与风格，不写入历史记录。</p>
+            <p class="wk-label" style="margin-top:0">直接作为系统提示词随每次对话发给模型（不写入历史记录）。可自行修改；改动会影响 AI 的工具调用与回答风格，<b>改动过大可能导致 AI 无法正常使用</b>。</p>
             <textarea class="wk-input" id="aiPrompt" rows="5" placeholder="例如：你是一个简洁的中文技术助手，回答尽量给要点。"></textarea>
+            <div class="filters" style="margin:10px 0 0">
+              <button class="wk-btn sm" onclick="aiSavePrompt()">保存提示词</button>
+              <button class="wk-btn ghost sm" onclick="aiResetPrompt()">还原默认</button>
+            </div>
+          </div>
+        </details>
+        <details class="wk-collapse" style="margin-top:12px;background:transparent;border:1px solid var(--border)">
+          <summary>AI 密钥（占位符，安全）</summary>
+          <div class="wk-collapse-body" style="border-top:1px solid var(--border)">
+            <p class="wk-label" style="margin-top:0">在此保存密钥（如第三方 API Key）。密钥值仅保存在服务端，<b>绝不会下发给 AI，也不会写进提示词</b>。AI 在写入文件或设置时使用占位符 <code>{名称}</code>，执行时会自动替换为真实值。</p>
+            <div class="wk-row">
+              <div style="flex:1">
+                <label class="wk-label">名称（用于占位符，如 MY_API）</label>
+                <input class="wk-input" id="secName" placeholder="MY_API">
+              </div>
+              <div style="flex:2">
+                <label class="wk-label">密钥值</label>
+                <input class="wk-input" id="secValue" type="password" placeholder="粘贴密钥值">
+              </div>
+            </div>
+            <div class="filters" style="margin:14px 0 0">
+              <button class="wk-btn sm" onclick="saveSecret()">保存密钥</button>
+              <button class="wk-btn ghost sm" onclick="loadSecrets()">刷新列表</button>
+            </div>
+            <div class="msg" id="secMsg"></div>
+            <div id="secList" style="margin-top:10px"><div class="empty">加载中...</div></div>
           </div>
         </details>
       </div>
     </details>
 
     <details class="wk-collapse">
-      <summary>AI 密钥（占位符，安全）</summary>
+      <summary>API 说明</summary>
       <div class="wk-collapse-body">
-        <p class="wk-label" style="margin-top:0">在此保存密钥（如第三方 API Key）。密钥值仅保存在服务端，<b>绝不会下发给 AI，也不会写进提示词</b>。AI 在写入文件或设置时使用占位符 <code>{名称}</code>，执行时会自动替换为真实值。</p>
-        <div class="wk-row">
-          <div style="flex:1">
-            <label class="wk-label">名称（用于占位符，如 MY_API）</label>
-            <input class="wk-input" id="secName" placeholder="MY_API">
-          </div>
-          <div style="flex:2">
-            <label class="wk-label">密钥值</label>
-            <input class="wk-input" id="secValue" type="password" placeholder="粘贴密钥值">
-          </div>
-        </div>
-        <div class="filters" style="margin:14px 0 0">
-          <button class="wk-btn sm" onclick="saveSecret()">保存密钥</button>
-          <button class="wk-btn ghost sm" onclick="loadSecrets()">刷新列表</button>
-        </div>
-        <div class="msg" id="secMsg"></div>
-        <div id="secList" style="margin-top:10px"><div class="empty">加载中...</div></div>
-      </div>
-    </details>
-
-    <details class="wk-collapse">
-      <summary>API 说明（访问量）</summary>
-      <div class="wk-collapse-body">
+        <div class="wk-api-h">访问量</div>
         <ul class="wk-list">
           <li>
             <div>
@@ -2454,12 +2646,8 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
             </div>
           </li>
         </ul>
-      </div>
-    </details>
 
-    <details class="wk-collapse">
-      <summary>API 说明（订阅）</summary>
-      <div class="wk-collapse-body">
+        <div class="wk-api-h">订阅</div>
         <ul class="wk-list">
           <li>
             <div>
@@ -2528,13 +2716,9 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
             </div>
           </li>
         </ul>
-      </div>
-    </details>
 
-    <details class="wk-collapse">
-      <summary>API 说明（AI）</summary>
-      <div class="wk-collapse-body">
-        <p class="wk-label" style="margin-top:0">以下接口均需管理员登录。遵循 OpenAI 兼容约定，地址会自动拼接 {baseUrl}/v1/...（已带 /v1 则不重复）。</p>
+        <div class="wk-api-h">AI</div>
+        <p class="wk-label" style="margin:0 0 8px;line-height:1.7">以下接口均需管理员登录。遵循 OpenAI 兼容约定，地址会自动拼接 {baseUrl}/v1/...（已带 /v1 则不重复）。</p>
         <ul class="wk-list">
           <li>
             <div>

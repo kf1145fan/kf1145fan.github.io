@@ -470,6 +470,13 @@ function normalizePermission(v: unknown): string {
   return AI_PERMISSIONS.indexOf(s) >= 0 ? s : "safe";
 }
 
+// 内置默认系统提示词：未自定义时使用（前端「还原」按钮也会恢复为它）
+const AI_DEFAULT_PROMPT = [
+  "你是这个博客后台的 AI 助手，请用简洁的中文回答。",
+  "你可以调用工具查看/修改仓库文件、触发部署、读写站点设置；危险操作在执行前可能会请用户确认。",
+  "回答使用 Markdown（标题、要点、代码块），不要编造未实际执行的结果。",
+].join("\n");
+
 const AI_CONFIG_KEY = "ai_config";
 
 async function getAiConfig(db: D1Database): Promise<AiConfig> {
@@ -500,7 +507,7 @@ app.get("/admin/api/ai/settings", async (c) => {
   if (!isAdmin(c.get("userInfo"))) return json({ error: "unauthorized" }, 401);
   try {
     const cfg = await getAiConfig((c.env as Bindings).DB);
-    return json({ ok: true, ...cfg, apiKey: "", hasKey: !!cfg.apiKey });
+    return json({ ok: true, ...cfg, apiKey: "", hasKey: !!cfg.apiKey, defaultPrompt: AI_DEFAULT_PROMPT });
   } catch (e) {
     return json({ ok: false, error: String(e) }, 500);
   }
@@ -783,7 +790,9 @@ app.post("/admin/api/ai/chat", async (c) => {
   const model = String(body.model || cfg.model || "").trim();
   const messages = Array.isArray(body.messages) ? body.messages : [];
   const prompt =
-    body.prompt === undefined ? String(cfg.prompt || "").trim() : String(body.prompt).trim();
+    body.prompt === undefined
+      ? String(cfg.prompt || "").trim() || AI_DEFAULT_PROMPT
+      : String(body.prompt).trim() || AI_DEFAULT_PROMPT;
   // 未自带系统消息时，使用配置中的 AI 提示词作为角色设定
   const msgs =
     prompt && (messages[0] as { role?: string } | undefined)?.role !== "system"
