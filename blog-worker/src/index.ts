@@ -803,6 +803,9 @@ app.post("/admin/api/ai/chat", async (c) => {
   if (!messages.length) return json({ ok: false, error: "messages required" }, 400);
   // 工具调用：前端仅在权限允许时下发 tools，此处原样转发给上游
   const tools = Array.isArray(body.tools) ? (body.tools as unknown[]) : null;
+  // 思考强度（白名单校验后透传 reasoning_effort）
+  const effortRaw = String(body.reasoning_effort || "").trim();
+  const reasoningEffort = ["low", "medium", "high"].indexOf(effortRaw) >= 0 ? effortRaw : "";
   try {
     const upstream = await fetch(aiEndpoint(baseUrl, "/chat/completions"), {
       method: "POST",
@@ -816,6 +819,7 @@ app.post("/admin/api/ai/chat", async (c) => {
         messages: msgs,
         stream: true,
         ...(tools && tools.length ? { tools, tool_choice: "auto" } : {}),
+        ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
       }),
     });
     if (!upstream.ok || !upstream.body) {

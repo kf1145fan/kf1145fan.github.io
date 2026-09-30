@@ -699,7 +699,8 @@ let aiAbort = null;           // 中止控制器
 let aiChatProxy = false;      // 前端代理（取自设置中已保存的配置）
 let aiPrompt = '';            // AI 提示词（系统提示）
 let aiPromptDefault = '';     // 内置默认系统提示词（「还原默认」用）
-let aiThink = false;          // 思考模式：显示并保留模型的思考过程
+let aiThinkLevel = 'off';     // 思考强度：off / low / medium / high（非 off 时作为 reasoning_effort 下发）
+let aiThink = false;          // 是否开启思考（由 aiThinkLevel 派生）
 let aiConvTitle = '';         // 当前会话标题（重命名后使用；为空时按首条用户消息生成）
 let aiPermission = 'safe';    // 权限级别：safe 安全访问 / important 重要确认 / all 全部确认 / full 完全访问
 let aiTools = null;           // 工具定义（权限非安全时加载）
@@ -780,16 +781,20 @@ async function aiSetPermission(v){
   aiLoadTools();
   try{ await api('/admin/api/ai/settings', { method:'PUT', body: JSON.stringify({ permission: aiPermission }) }); }catch(e){}
 }
-// 读取本地偏好：思考模式、全屏
+// 读取本地偏好：思考强度、全屏
 function aiLoadPrefs(){
-  try{ aiThink = localStorage.getItem('aiThink') === '1'; }catch(e){}
-  const ck = $('#aiChatThink'); if(ck) ck.checked = aiThink;
+  let lv = 'off';
+  try{ lv = localStorage.getItem('aiThinkLevel') || 'off'; }catch(e){}
+  aiSetThink(lv);
   try{ if(localStorage.getItem('aiFull') === '1') aiSetFull(true); }catch(e){}
 }
-function aiSetThink(on){
-  aiThink = !!on;
-  const ck = $('#aiChatThink'); if(ck && ck.checked !== aiThink) ck.checked = aiThink;
-  try{ localStorage.setItem('aiThink', aiThink ? '1' : '0'); }catch(e){}
+// 思考强度：off 关闭；low/medium/high 作为 reasoning_effort 发给服务商
+function aiSetThink(lv){
+  lv = ['off','low','medium','high'].indexOf(lv) >= 0 ? lv : 'off';
+  aiThinkLevel = lv;
+  aiThink = lv !== 'off';
+  const sel = $('#aiChatThink'); if(sel && sel.value !== lv) sel.value = lv;
+  try{ localStorage.setItem('aiThinkLevel', lv); }catch(e){}
 }
 function aiSetFull(on){
   const el = document.querySelector('.ai-chat'); if(!el) return;
@@ -1121,6 +1126,8 @@ async function aiStreamRound(modelName, ui){
   const hist = aiConvMessages.map(aiCleanMsg);
   const reqMessages = sysParts.length ? [{ role:'system', content: sysParts.join('\\n\\n') }].concat(hist) : hist;
   const payload = { messages: reqMessages, model: modelName };
+  // 思考强度：作为 reasoning_effort 一并发给服务商（关闭时不发送）
+  if(aiThink) payload.reasoning_effort = aiThinkLevel;
   if(aiTools && aiTools.length){ payload.tools = aiTools; payload.tool_choice = 'auto'; }
   let resp;
   if(aiChatProxyOn()){
@@ -2416,9 +2423,13 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
             <option value="all">全部确认 · 每步都确认</option>
             <option value="full">完全访问 · 无需确认</option>
           </select>
-          <label class="wk-label" style="margin:0;display:inline-flex;align-items:center;gap:5px;cursor:pointer" title="显示并保留模型的思考过程（需所选模型支持推理，如 deepseek-reasoner）">
-            <input type="checkbox" id="aiChatThink" onchange="aiSetThink(this.checked)"> 思考模式
-          </label>
+          <span class="wk-label" style="margin:0">思考强度</span>
+          <select class="wk-input" id="aiChatThink" onchange="aiSetThink(this.value)" title="思考强度会作为 reasoning_effort 发给服务商；需所选模型支持推理（如 deepseek-reasoner），不支持时会报错" style="width:auto;min-width:120px;max-width:180px;padding:4px 8px">
+            <option value="off">关闭</option>
+            <option value="low">低</option>
+            <option value="medium">中</option>
+            <option value="high">高</option>
+          </select>
         </div>
         <div class="ai-input">
           <textarea class="wk-input" id="aiInput" rows="3" placeholder="输入文字"></textarea>
