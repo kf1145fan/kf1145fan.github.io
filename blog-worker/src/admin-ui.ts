@@ -175,9 +175,9 @@ a{color:var(--accent);text-decoration:none}
 .ai-body{white-space:pre-wrap;word-break:break-word;line-height:1.7;font-size:14px;border-radius:2px}
 .ai-msg.assistant .ai-body{background:transparent;border:none;padding:0}
 .ai-msg.user .ai-body{max-width:82%;padding:8px 12px;background:var(--hover);border:1px solid var(--border)}
-.ai-input{display:flex;gap:8px;align-items:flex-end;padding:12px 14px 6px;border-top:1px solid var(--border);flex-shrink:0}
-.ai-input textarea{flex:1;resize:vertical;min-height:56px;border-radius:2px}
-.ai-foot{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:0 14px 12px;flex-shrink:0}
+.ai-input{display:flex;gap:8px;align-items:flex-end;padding:8px 14px 12px;flex-shrink:0}
+.ai-input textarea{flex:1;resize:vertical;min-height:52px;border-radius:2px}
+.ai-foot{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:10px 14px 0;border-top:1px solid var(--border);flex-shrink:0}
 .ai-model-list{max-height:240px;overflow:auto;display:flex;flex-wrap:wrap;gap:6px;align-content:flex-start}
 .ai-pick{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--border);border-radius:2px;padding:3px 8px;font-size:12px;cursor:pointer;background:var(--input-bg)}
 .ai-pick:hover{background:var(--hover)}
@@ -469,6 +469,7 @@ async function loadAiSettings(){
       const cp = $('#aiClientProxy'); if(cp) cp.checked = !!d.clientProxy;
       aiPicked = Array.isArray(d.models) ? d.models.slice() : [];
       renderAiModels();
+      const pr = $('#aiPrompt'); if(pr) pr.value = d.prompt || '';
       const k = $('#aiApiKey');
       if(k){ k.value = ''; k.placeholder = d.hasKey ? '已保存（留空表示不修改）' : '未设置'; }
     }
@@ -489,6 +490,7 @@ async function saveAiSettings(){
     apiKey: aiVal('aiApiKey'),
     model: md,
     models: picked,
+    prompt: aiVal('aiPrompt'),
     enabled: !!(en && en.checked),
     clientProxy: aiProxyOn()
   };
@@ -654,6 +656,7 @@ let aiConvMessages = [];      // [{role, content}]
 let aiStreaming = false;      // 是否正在流式接收
 let aiAbort = null;           // 中止控制器
 let aiChatProxy = false;      // 前端代理（取自设置中已保存的配置）
+let aiPrompt = '';            // AI 提示词（系统提示）
 
 async function loadAiChat(){
   // 进入页面：加载历史会话列表 + 模型下拉（可选模型）
@@ -663,6 +666,7 @@ async function loadAiChat(){
     const r = await api('/admin/api/ai/settings');
     const d = (r.ok && r.data) ? r.data : {};
     aiChatProxy = !!d.clientProxy;
+    aiPrompt = String(d.prompt || '').trim();
     const sel = $('#aiChatModel');
     if(sel){
       const list = (Array.isArray(d.models) && d.models.length) ? d.models : (d.model ? [d.model] : []);
@@ -778,6 +782,8 @@ async function aiSend(){
 
   const modelEl = $('#aiChatModel');
   const modelName = modelEl ? modelEl.value.trim() : '';
+  // 系统提示词（AI 提示词）：仅在请求时附加，不写入历史
+  const reqMessages = aiPrompt ? [{ role:'system', content: aiPrompt }].concat(aiConvMessages) : aiConvMessages;
   let acc = '';
   let target = '/admin/api/ai/chat';
   try{
@@ -792,7 +798,7 @@ async function aiSend(){
         method:'POST',
         headers: Object.assign({'Content-Type':'application/json'}, k ? {Authorization:'Bearer ' + k} : {}),
         signal: aiAbort.signal,
-        body: JSON.stringify({ messages: aiConvMessages, model: modelName, stream: true })
+        body: JSON.stringify({ messages: reqMessages, model: modelName, stream: true })
       });
     } else {
       const headers = { 'Content-Type':'application/json' };
@@ -801,7 +807,7 @@ async function aiSend(){
         method:'POST',
         headers: headers,
         signal: aiAbort.signal,
-        body: JSON.stringify({ messages: aiConvMessages, model: modelName })
+        body: JSON.stringify({ messages: reqMessages, model: modelName })
       });
     }
     const ct = resp.headers.get('content-type') || '';
@@ -1988,15 +1994,15 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
           <button class="wk-btn ghost sm" id="aiStopBtn" style="display:none" onclick="aiStop()">停止</button>
         </div>
         <div id="aiMessages" class="ai-scroll"><div class="ai-col" id="aiCol"><div class="empty">开始和 AI 对话吧</div></div></div>
-        <div class="ai-input">
-          <textarea class="wk-input" id="aiInput" rows="3" placeholder="输入消息，Enter 发送，Shift+Enter 换行"></textarea>
-          <button class="wk-btn sm" id="aiSendBtn" onclick="aiSend()">发送</button>
-        </div>
+        <div class="msg" id="aiChatMsg" style="margin:0 14px"></div>
         <div class="ai-foot">
           <span class="wk-label" style="margin:0">模型</span>
           <select class="wk-input" id="aiChatModel" style="width:auto;min-width:170px;max-width:260px;padding:4px 8px"></select>
         </div>
-        <div class="msg" id="aiChatMsg" style="margin:0 14px 12px"></div>
+        <div class="ai-input">
+          <textarea class="wk-input" id="aiInput" rows="3" placeholder="输入文字"></textarea>
+          <button class="wk-btn sm" id="aiSendBtn" onclick="aiSend()">发送</button>
+        </div>
       </div>
     </div>
   </div>
@@ -2138,6 +2144,13 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
               <button class="wk-btn ghost sm" onclick="aiPickNone()">清空</button>
             </div>
             <div id="aiModelList" class="ai-model-list" style="margin-top:8px"></div>
+          </div>
+        </details>
+        <details class="wk-collapse" style="margin-top:12px;background:transparent;border:1px solid var(--border)">
+          <summary>AI 提示词编辑</summary>
+          <div class="wk-collapse-body" style="border-top:1px solid var(--border)">
+            <p class="wk-label" style="margin-top:0">作为系统消息随每次对话发送，用于设定助手的角色与风格，不写入历史记录。</p>
+            <textarea class="wk-input" id="aiPrompt" rows="5" placeholder="例如：你是一个简洁的中文技术助手，回答尽量给要点。"></textarea>
           </div>
         </details>
       </div>

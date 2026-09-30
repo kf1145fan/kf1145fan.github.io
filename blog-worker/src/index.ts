@@ -446,6 +446,7 @@ interface AiConfig {
   apiKey: string; // API 密钥（读取接口不回传明文）
   model: string; // 默认模型
   models: string[]; // 可选模型列表（AI 助手中可切换）
+  prompt: string; // 系统提示词（AI 助手的角色设定）
   enabled: boolean; // 是否启用
   clientProxy: boolean; // 前端代理：由浏览器直连服务商
 }
@@ -455,6 +456,7 @@ const AI_DEFAULT_CONFIG: AiConfig = {
   apiKey: "",
   model: "",
   models: [],
+  prompt: "",
   enabled: false,
   clientProxy: false,
 };
@@ -510,6 +512,7 @@ app.put("/admin/api/ai/settings", async (c) => {
       models: Array.isArray(body.models)
         ? body.models.map((m) => String(m)).filter(Boolean)
         : cur.models,
+      prompt: body.prompt === undefined ? cur.prompt : String(body.prompt),
       enabled: body.enabled === undefined ? cur.enabled : !!body.enabled,
       clientProxy: body.clientProxy === undefined ? cur.clientProxy : !!body.clientProxy,
     };
@@ -769,6 +772,13 @@ app.post("/admin/api/ai/chat", async (c) => {
   const apiKey = String(body.apiKey || cfg.apiKey || "");
   const model = String(body.model || cfg.model || "").trim();
   const messages = Array.isArray(body.messages) ? body.messages : [];
+  const prompt =
+    body.prompt === undefined ? String(cfg.prompt || "").trim() : String(body.prompt).trim();
+  // 未自带系统消息时，使用配置中的 AI 提示词作为角色设定
+  const msgs =
+    prompt && (messages[0] as { role?: string } | undefined)?.role !== "system"
+      ? [{ role: "system", content: prompt }, ...messages]
+      : messages;
   if (!baseUrl) return json({ ok: false, error: "请先在「设置 → AI 设置」填写并保存 API 地址" }, 400);
   if (!model) return json({ ok: false, error: "请先填写默认模型（或在聊天页指定模型）" }, 400);
   if (!messages.length) return json({ ok: false, error: "messages required" }, 400);
@@ -780,7 +790,7 @@ app.post("/admin/api/ai/chat", async (c) => {
         Accept: "text/event-stream",
         ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
       },
-      body: JSON.stringify({ model, messages, stream: true }),
+      body: JSON.stringify({ model, messages: msgs, stream: true }),
     });
     if (!upstream.ok || !upstream.body) {
       const text = await upstream.text().catch(() => "");
