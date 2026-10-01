@@ -222,6 +222,9 @@ a{color:var(--accent);text-decoration:none}
 .ai-proc-text{white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere;line-height:1.7}
 /* 最终回答：与过程分开，始终显示 */
 .ai-answer{margin:0}
+/* 等待模型响应：首个输出片段到达后隐藏 */
+.ai-wait{font-size:12.5px;color:var(--muted);padding:2px 0;animation:aiWaitPulse 1.2s ease-in-out infinite}
+@keyframes aiWaitPulse{0%,100%{opacity:.45}50%{opacity:1}}
 /* 输入区上方一行的「i」按钮：查看已用 token / 缓存命中 */
 #aiUsageBtn{margin-left:auto;flex:0 0 auto;width:26px;height:26px;padding:0;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;line-height:1}
 .ai-usage-pop{position:fixed;z-index:1200;background:var(--card);border:1px solid var(--border);border-radius:4px;box-shadow:0 6px 24px rgba(0,0,0,.18);padding:10px 12px;min-width:190px;font-size:12px}
@@ -782,6 +785,7 @@ let aiConvMessages = [];      // [{role, content}]
 let aiStreaming = false;      // 是否正在流式接收
 let aiAbort = null;           // 中止控制器
 let aiUsagePending = null;    // 进行中一轮的 usage（尚未写入消息，供「i」面板实时展示）
+let aiPerfPending = null;     // 进行中一轮的耗时（首字延迟等，供「i」面板实时展示）
 let aiChatProxy = false;      // 前端代理（取自设置中已保存的配置）
 let aiPrompt = '';            // AI 提示词（系统提示）
 let aiPromptDefault = '';     // 内置默认系统提示词（「还原默认」用）
@@ -957,7 +961,7 @@ function aiSyncUrl(){
 }
 function aiNewChat(){
   if(aiStreaming){ toast('正在回复中，请稍候', true); return; }
-  aiConvId = null; aiConvMessages = []; aiConvTitle = ''; aiUsagePending = null;
+  aiConvId = null; aiConvMessages = []; aiConvTitle = ''; aiUsagePending = null; aiPerfPending = null;
   aiSetTitle('');
   aiUpdateUsagePop();
   renderAiMessages();
@@ -991,7 +995,7 @@ async function aiOpenConv(id){
   const c = r.data.conversation;
   aiConvId = c.id;
   aiConvMessages = Array.isArray(c.messages) ? c.messages : [];
-  aiConvTitle = c.title || ''; aiUsagePending = null;
+  aiConvTitle = c.title || ''; aiUsagePending = null; aiPerfPending = null;
   aiSetTitle(aiConvTitle);
   aiUpdateUsagePop();
   renderAiMessages();
@@ -1211,22 +1215,47 @@ function aiAccUsage(acc, u){
   acc.cached += ((u.prompt_tokens_details && +u.prompt_tokens_details.cached_tokens) || (+u.prompt_cache_hit_tokens) || 0);
 }
 function aiFmtNum(n){ n = +n || 0; return String(n).replace(/\\B(?=(\\d{3})+(?!\\d))/g, ','); }
-// 整段对话累计用量（用于「i」按钮弹层）：已落库消息 + 进行中一轮的实时用量
+// 累计一段耗时数据：首字延迟取各轮平均；token 速率按「首字之后到结束」的生成时长平均
+function aiAccPerf(u, p){
+  if(!p || typeof p !== 'object') return;
+  if(+p.ttft > 0){ u.ttftSum += +p.ttft; u.ttftN++; }
+  const gen = (+p.ms || 0) - (+p.ttft || 0);
+  if(+p.out > 0 && gen > 0){ u.genMs += gen; u.outTok += +p.out; }
+}
+// 整段对话累计用量（用于「i」按钮弹层）：已落库消息 + 进行中一轮的实时用量与耗时
 function aiConvUsage(){
-  const u = { has:false, total:0, cached:0, prompt:0, completion:0 };
+  const u = { has:false, total:0, cached:0, prompt:0, completion:0,
+              ttftSum:0, ttftN:0, genMs:0, outTok:0 };
   aiConvMessages.forEach(function(m){ if(m && m.usage) aiAccUsage(u, m.usage); });
   if(aiUsagePending) aiAccUsage(u, aiUsagePending);
+  aiConvMessages.forEach(function(m){ if(m && m.perf) aiAccPerf(u, m.perf); });
+  if(aiPerfPending) aiAccPerf(u, aiPerfPending);
   return u;
 }
+// 速度行：首字速度（取整段平均）+ 平均 Token 速度
+function aiSpeedRows(u){
+  let s = '';
+  if(u.ttftN > 0){
+    s += '<div class="ai-usage-row"><span>首字速度</span><b>' + (u.ttftSum / u.ttftN / 1000).toFixed(2) + ' s</b></div>';
+  }
+  if(u.genMs > 0 && u.outTok > 0){
+    s += '<div class="ai-usage-row"><span>平均Token速度</span><b>' + (u.outTok / (u.genMs / 1000)).toFixed(1) + ' tok/s</b></div>';
+  }
+  return s;
+}
 function aiUsagePopHtml(u){
-  if(!u.has){
+  const speed = aiSpeedRows(u);
+  if(!u.has && !speed){
     return '<div class="ai-usage-pop-h">Token 用量</div><div class="ai-usage-empty">当前对话暂无用量的数据（服务商未返回 usage）</div>';
   }
-  return '<div class="ai-usage-pop-h">Token 用量</div>'+
-    '<div class="ai-usage-row"><span>已使用</span><b>' + aiFmtNum(u.total) + ' tokens</b></div>'+
-    '<div class="ai-usage-row"><span>输入</span><span>' + aiFmtNum(u.prompt) + '</span></div>'+
-    '<div class="ai-usage-row"><span>输出</span><span>' + aiFmtNum(u.completion) + '</span></div>'+
-    '<div class="ai-usage-row"><span>缓存命中</span><b>' + aiFmtNum(u.cached) + ' tokens</b></div>';
+  let body = '';
+  if(u.has){
+    body = '<div class="ai-usage-row"><span>已使用</span><b>' + aiFmtNum(u.total) + ' tokens</b></div>'+
+      '<div class="ai-usage-row"><span>输入</span><span>' + aiFmtNum(u.prompt) + '</span></div>'+
+      '<div class="ai-usage-row"><span>输出</span><span>' + aiFmtNum(u.completion) + '</span></div>'+
+      '<div class="ai-usage-row"><span>缓存命中</span><b>' + aiFmtNum(u.cached) + ' tokens</b></div>';
+  }
+  return '<div class="ai-usage-pop-h">Token 用量</div>' + body + speed;
 }
 // 弹层常开时，实时刷新其中的用量数字
 function aiUpdateUsagePop(){
@@ -1390,14 +1419,16 @@ async function aiAgentLoop(){
       const lastRound = rounds >= AI_MAX_ROUNDS;
       renderAiMessages();
       const box = $('#aiCol');
-      // 生成中的临时气泡：不显示「AI」标签
+      // 生成中的临时气泡：不显示「AI」标签；首个输出片段到达前先显示「等待模型响应」
       if(box) box.insertAdjacentHTML('beforeend', '<div class="ai-msg assistant">'+
-        (aiThink ? '<details class="ai-think" id="aiCurThink" open><summary>思考中…</summary><div class="ai-think-body"></div></details>' : '')+
-        '<div class="ai-body md" id="aiCurBody"></div></div>');
+        (aiThink ? '<details class="ai-think" id="aiCurThink" style="display:none" open><summary>思考中…</summary><div class="ai-think-body"></div></details>' : '')+
+        '<div class="ai-body md" id="aiCurBody"></div>'+
+        '<div class="ai-wait" id="aiCurWait">等待模型响应…</div></div>');
       scrollAiBottom();
       const bodyEl = box ? box.querySelector('#aiCurBody') : null;
       const thinkEl = box ? box.querySelector('#aiCurThink') : null;
-      const ui = { bodyEl: bodyEl, thinkEl: thinkEl, acc: '' };
+      const waitEl = box ? box.querySelector('#aiCurWait') : null;
+      const ui = { bodyEl: bodyEl, thinkEl: thinkEl, waitEl: waitEl, acc: '' };
       let res;
       try{
         res = await aiStreamRound(modelName, ui, lastRound);
@@ -1413,6 +1444,9 @@ async function aiAgentLoop(){
         const hint = aiChatProxyOn() ? '（前端代理请求失败：服务商可能不允许跨域）' : '';
         if(msg){ msg.className = 'msg err'; msg.textContent = '请求失败：' + err + hint; }
         toast('请求失败：' + err, true);
+        // 保留已收到的部分内容，并清掉临时气泡（否则会残留「等待模型响应」）
+        if(ui.acc){ aiConvMessages.push({ role:'assistant', content: ui.acc }); }
+        finished = true;
         break;
       }
       if(res.toolCalls && res.toolCalls.length && !lastRound){
@@ -1423,8 +1457,9 @@ async function aiAgentLoop(){
         };
         if(aiThink && res.reasoning) am.reasoning = res.reasoning;
         if(res.usage) am.usage = res.usage;
+        if(res.perf) am.perf = res.perf;
         aiConvMessages.push(am);
-        aiUsagePending = null; // 已并入消息，避免重复累计
+        aiUsagePending = null; aiPerfPending = null; // 已并入消息，避免重复累计
         renderAiMessages();
         aiUpdateUsagePop();
         for(let k=0; k<res.toolCalls.length; k++){
@@ -1457,13 +1492,14 @@ async function aiAgentLoop(){
       const fm = { role:'assistant', content: res.content || (lastRound ? '（工具调用次数已达本轮上限，请回复「继续」以接着处理）' : '') };
       if(aiThink && res.reasoning) fm.reasoning = res.reasoning;
       if(res.usage) fm.usage = res.usage;
+      if(res.perf) fm.perf = res.perf;
       aiConvMessages.push(fm);
-      aiUsagePending = null;
+      aiUsagePending = null; aiPerfPending = null;
       finished = true;
       break;
     }
   }finally{
-    aiStreaming = false; aiAbort = null; aiUsagePending = null;
+    aiStreaming = false; aiAbort = null; aiUsagePending = null; aiPerfPending = null;
     aiSetSendState(false);
     aiUpdateUsagePop();
     // 生成结束（非中断/异常）后重渲染一次：恢复「AI」标签与「复制」按钮
@@ -1474,9 +1510,9 @@ async function aiAgentLoop(){
 }
 // 清理历史消息：去掉仅供前端展示的字段（思考/拒绝/用量），避免上游接口报错
 function aiCleanMsg(m){
-  if(!m || (m.reasoning === undefined && m.denied === undefined && m.usage === undefined)) return m;
+  if(!m || (m.reasoning === undefined && m.denied === undefined && m.usage === undefined && m.perf === undefined)) return m;
   const c = {};
-  for(const k in m){ if(k !== 'reasoning' && k !== 'denied' && k !== 'usage') c[k] = m[k]; }
+  for(const k in m){ if(k !== 'reasoning' && k !== 'denied' && k !== 'usage' && k !== 'perf') c[k] = m[k]; }
   return c;
 }
 // 流式请求一轮，返回 {content, toolCalls, reasoning, usage}
@@ -1493,6 +1529,8 @@ async function aiStreamRound(modelName, ui, noTools){
   if(aiThink) payload.reasoning_effort = aiThinkLevel;
   // 收尾轮不带工具，让模型直接输出文字总结
   if(aiTools && aiTools.length && !noTools){ payload.tools = aiTools; payload.tool_choice = 'auto'; }
+  const t0 = Date.now();   // 本轮发起点：用于首字速度与平均 token 速度
+  let ttft = null;         // 首个输出片段耗时（ms）
   let resp;
   if(aiChatProxyOn()){
     // 前端代理：浏览器直连服务商（仅当服务商允许跨域 CORS 时可用）
@@ -1526,6 +1564,14 @@ async function aiStreamRound(modelName, ui, noTools){
   const dec = new TextDecoder();
   let buf = '', acc = '', reasonAcc = '', lastPaint = 0, usageAcc = null;
   const toolAcc = {};
+  // 首个输出片段到达：撤掉「等待模型响应」，记录首字延迟并实时反映到「i」面板
+  const markFirst = function(){
+    if(ttft !== null) return;
+    ttft = Date.now() - t0;
+    if(ui && ui.waitEl) ui.waitEl.style.display = 'none';
+    aiPerfPending = { ttft: ttft };
+    aiUpdateUsagePop();
+  };
   while(true){
     const chunk = await reader.read();
     if(chunk.done) break;
@@ -1549,16 +1595,19 @@ async function aiStreamRound(modelName, ui, noTools){
         const rc = delta.reasoning_content || delta.reasoning;
         if(rc){
           reasonAcc += rc;
+          markFirst();
           if(ui && ui.thinkEl){ ui.thinkEl.style.display = ''; const b = ui.thinkEl.querySelector('.ai-think-body'); if(b) b.textContent = reasonAcc; }
         }
       }
       if(delta.content){
         acc += delta.content;
+        markFirst();
         if(ui) ui.acc = acc; // 暴露给调用方，停止时可保留部分内容
         const now = Date.now();
         if(ui && ui.bodyEl && (now - lastPaint > 80)){ lastPaint = now; ui.bodyEl.innerHTML = renderMd(acc); scrollAiBottom(); }
       }
       if(delta.tool_calls && delta.tool_calls.length){
+        markFirst();
         for(let ti=0; ti<delta.tool_calls.length; ti++){
           const tc = delta.tool_calls[ti];
           const key = (tc.index === undefined || tc.index === null) ? 0 : tc.index;
@@ -1580,8 +1629,12 @@ async function aiStreamRound(modelName, ui, noTools){
   // 收尾：把流式内容按 Markdown 完整渲染一次
   if(ui && ui.bodyEl) ui.bodyEl.innerHTML = renderMd(acc);
   if(aiThink && ui && ui.thinkEl && !reasonAcc) ui.thinkEl.style.display = 'none';
+  if(ui && ui.waitEl) ui.waitEl.style.display = 'none';
   scrollAiBottom();
-  return { content: acc, toolCalls: toolCalls, reasoning: reasonAcc, usage: usageAcc };
+  // out：本轮的输出 token 数（取上游 usage），用于折算平均 token 速度
+  const outTok = usageAcc ? (+usageAcc.completion_tokens || 0) : 0;
+  const perf = (ttft === null) ? null : { ttft: ttft, ms: Date.now() - t0, out: outTok };
+  return { content: acc, toolCalls: toolCalls, reasoning: reasonAcc, usage: usageAcc, perf: perf };
 }
 // 危险操作确认卡片（返回 Promise：允许=true / 拒绝=false）
 function aiAskConfirm(name, args){
