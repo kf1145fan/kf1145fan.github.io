@@ -684,9 +684,21 @@ async function loadAiModels(){
       else err = d.error || '获取失败';
     }
     if(models){
-      aiModels = models;
+      // 去重
+      const seen = Object.create(null), uniq = [];
+      models.forEach(function(m){ if(m && !seen[m]){ seen[m] = 1; uniq.push(m); } });
+      aiModels = uniq;
+      // 重新拉取后清掉已不在列表里的旧选择，避免「已选 N 个」凭空多出来
+      const set = Object.create(null);
+      uniq.forEach(function(m){ set[m] = 1; });
+      const kept = aiPicked.filter(function(m){ return set[m]; });
+      const dropped = aiPicked.length - kept.length;
+      aiPicked = kept;
+      aiSyncModelsToText();
       renderAiModels();
-      if(msg){ msg.className='msg ok'; msg.textContent='共获取到 ' + aiModels.length + ' 个模型，可多选后保存为可选模型'; }
+      let tip = '共获取到 ' + aiModels.length + ' 个模型';
+      if(dropped > 0) tip += '，已移除 ' + dropped + ' 个列表中不存在的旧模型';
+      if(msg){ msg.className='msg ok'; msg.textContent = tip + '，可勾选后保存为可选模型'; }
     } else {
       aiModels = [];
       renderAiModels();
