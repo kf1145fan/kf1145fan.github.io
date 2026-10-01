@@ -753,6 +753,8 @@ const AI_MAX_ROUNDS = 50;     // 单轮AI回复允许的最大工具调用轮数
 
 async function loadAiChat(){
   // 进入页面：加载历史会话列表 + 模型下拉（可选模型）
+  // 若 URL 带会话 id，先立刻显示「加载中」，避免打开期间标题/内容空白
+  if(aiPendingConv) aiShowLoading('加载中…');
   loadAiConversations();
   aiInitSide();
   aiLoadPrefs();
@@ -885,6 +887,8 @@ function aiResetPrompt(){
 }
 async function loadAiConversations(){
   const box = $('#aiConvList'); if(!box) return;
+  // 列表为空（首次加载/尚无数据）时显示加载中，已有内容则不闪烁
+  if(!box.querySelector('.ai-conv')) box.innerHTML = '<div class="empty">加载中…</div>';
   try{
     const r = await api('/admin/api/ai/conversations');
     if(!r.ok || !r.data){ box.innerHTML = '<div class="empty">加载失败</div>'; return; }
@@ -898,6 +902,11 @@ async function loadAiConversations(){
       '</div>';
     }).join('');
   }catch(e){ box.innerHTML = '<div class="empty">加载失败</div>'; }
+}
+// 加载中/加载失败：顶部标题与消息区同时提示（用户能一眼看到正在加载）
+function aiShowLoading(tip){
+  const t = $('#aiChatTitle'); if(t) t.textContent = tip || '加载中…';
+  const col = $('#aiCol'); if(col) col.innerHTML = '<div class="empty">' + (tip || '加载中…') + '</div>';
 }
 // 同步地址栏：/admin/ai/<id>（新对话则回到 /admin/ai），刷新后仍停留在当前对话
 function aiSyncUrl(){
@@ -914,8 +923,27 @@ function aiNewChat(){
 }
 async function aiOpenConv(id){
   if(aiStreaming){ toast('正在回复中，请稍候', true); return; }
-  const r = await api('/admin/api/ai/conversation?id=' + id);
-  if(!r.ok || !r.data || !r.data.conversation){ toast('加载会话失败', true); return; }
+  // 打开会话期间：顶部名字与消息区都显示「加载中」
+  aiShowLoading('加载中…');
+  const oldId = aiConvId;
+  aiConvId = id; // 先高亮，避免列表点击无反馈
+  loadAiConversations();
+  let r;
+  try{
+    r = await api('/admin/api/ai/conversation?id=' + id);
+  }catch(e){
+    aiConvId = oldId;
+    aiShowLoading('加载失败');
+    toast('加载会话失败：网络错误', true);
+    return;
+  }
+  if(!r.ok || !r.data || !r.data.conversation){
+    aiConvId = oldId;
+    aiShowLoading('加载失败');
+    toast('加载会话失败' + (r.data && r.data.error ? '：' + r.data.error : ''), true);
+    loadAiConversations();
+    return;
+  }
   const c = r.data.conversation;
   aiConvId = c.id;
   aiConvMessages = Array.isArray(c.messages) ? c.messages : [];
@@ -1091,15 +1119,15 @@ function aiCopyTurn(startIdx){
   for(let k = startIdx; k < aiConvMessages.length; k++){
     const m = aiConvMessages[k] || {};
     if(m.role === 'user') break;
-    if(typeof m.content === 'string' && m.content) text += (text ? '\n\n' : '') + m.content;
+    if(typeof m.content === 'string' && m.content) text += (text ? '\\n\\n' : '') + m.content;
   }
   aiCopyText(text);
 }
 // 单个工具：调用与结果合并展示（一行调用 + 紧随其后的结果）
 function aiToolMergedHtml(name, args, r){
   const denied = !!(r && r.denied);
-  const argsStr = String(args == null ? '' : args).replace(/\s+/g, ' ').trim().slice(0, 300);
-  const resStr = r ? String(r.content == null ? '' : r.content).replace(/\s+/g, ' ').trim().slice(0, 300) : '';
+  const argsStr = String(args == null ? '' : args).replace(/\\s+/g, ' ').trim().slice(0, 300);
+  const resStr = r ? String(r.content == null ? '' : r.content).replace(/\\s+/g, ' ').trim().slice(0, 300) : '';
   let s = '<div class="ai-tool-call"><span class="ai-tool-tag">调用</span>' + esc(name || '');
   if(argsStr) s += ' <span class="ai-tool-inline">' + esc(argsStr) + '</span>';
   if(r){
@@ -1118,7 +1146,7 @@ function aiTurnHtml(turn, startIdx){
   for(let k = 0; k < turn.length; k++){
     const m = turn[k] || {};
     if(m.role === 'tool') continue; // 已在其「调用」处合并展示
-    if(m.reasoning) think += (think ? '\n\n' : '') + m.reasoning;
+    if(m.reasoning) think += (think ? '\\n\\n' : '') + m.reasoning;
     if(m.content){ hasText = true; body += '<div class="ai-body md">' + renderMd(m.content) + '</div>'; }
     if(m.tool_calls && m.tool_calls.length){
       m.tool_calls.forEach(function(t){
@@ -2060,7 +2088,7 @@ async function loadFiles(){
   items.forEach(f=>{
     const li=document.createElement('li');
     const isDir=f.type==='dir';
-    const isZip=/\.zip$/i.test(f.name||'');
+    const isZip=/\\.zip$/i.test(f.name||'');
     li.style.cursor=isDir?'pointer':'default';
     const pick='<input type="checkbox" class="filePick" data-path="'+esc(f.path)+'" style="width:auto;flex-shrink:0">';
     const label=isDir?('📁 '+esc(f.name)):('📄 '+esc(f.name)+' · '+fmtSize(f.size));
