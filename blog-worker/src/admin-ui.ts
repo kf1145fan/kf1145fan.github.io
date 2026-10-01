@@ -212,13 +212,16 @@ a{color:var(--accent);text-decoration:none}
 .ai-think{border:1px dashed var(--border);border-radius:2px;padding:6px 10px;margin:0 0 8px;font-size:12.5px;color:var(--muted);background:var(--hover)}
 .ai-think>summary{cursor:pointer;font-size:12px;color:var(--muted);outline:none}
 .ai-think-body{margin-top:6px;white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere;line-height:1.7}
-/* 批量工具调用：默认折叠，可展开 */
-.ai-tools-fold{border:1px solid var(--border);border-radius:2px;background:var(--hover);margin:4px 0}
-.ai-tools-fold>summary{cursor:pointer;font-size:12px;color:var(--muted);padding:6px 10px;outline:none}
-.ai-tools-fold>summary:hover{color:var(--fg)}
-.ai-tools-fold>div{padding:0 10px 8px;max-height:320px;overflow:auto}
-/* 折叠状态也能看到最新一次工具调用（不含返回结果） */
-.ai-tools-fold>summary .ai-tools-last{opacity:.8}
+/* 思考与工具调用过程：生成结束默认收起，可展开查看 */
+.ai-proc{border:1px solid var(--border);border-radius:2px;background:var(--hover);margin:0 0 8px}
+.ai-proc>summary{cursor:pointer;font-size:12px;color:var(--muted);padding:6px 10px;outline:none}
+.ai-proc>summary:hover{color:var(--fg)}
+.ai-proc-body{padding:2px 10px 8px;max-height:420px;overflow:auto;font-size:12.5px;color:var(--muted)}
+.ai-proc-seg{margin:0 0 8px}
+.ai-proc-tag{font-size:11px;color:var(--muted);opacity:.85;margin-bottom:2px}
+.ai-proc-text{white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere;line-height:1.7}
+/* 最终回答：与过程分开，始终显示 */
+.ai-answer{margin:0}
 /* 输入区上方一行的「i」按钮：查看已用 token / 缓存命中 */
 #aiUsageBtn{margin-left:auto;flex:0 0 auto;width:26px;height:26px;padding:0;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;line-height:1}
 .ai-usage-pop{position:fixed;z-index:1200;background:var(--card);border:1px solid var(--border);border-radius:4px;box-shadow:0 6px 24px rgba(0,0,0,.18);padding:10px 12px;min-width:190px;font-size:12px}
@@ -1104,13 +1107,23 @@ function aiToolNoteHtml(m){
   return '<div class="ai-tool-note'+(denied?' err':'')+'"><span class="ai-tool-tag">'+
     (denied?'已拒绝':'工具结果')+'</span>'+esc((m && m.name) || '')+(short ? '：' + esc(short) : '')+'</div>';
 }
+// 折叠块的展开状态（data-k -> 是否展开）。只记录用户手动操作过的块，
+// 其余按默认状态：过程块在生成中默认展开、生成结束后默认收起
+const aiFoldOpen = {};
+// 生成后立即绑定：用户手动展开/收起时记住状态，重渲染后按此恢复
+function aiBindFolds(box){
+  box.querySelectorAll('details[data-k]').forEach(function(d){
+    d.addEventListener('toggle', function(){ aiFoldOpen[d.getAttribute('data-k')] = d.open; });
+  });
+}
+// 折叠块的 open 属性：用户操作过就听用户的，否则用默认值
+function aiFoldAttr(key, defOpen){
+  const v = aiFoldOpen[key];
+  return (v === undefined ? !!defOpen : v) ? ' open' : '';
+}
 function renderAiMessages(){
   const box = $('#aiCol'); if(!box) return;
   if(!aiConvMessages.length){ box.innerHTML = '<div class="empty">开始和 AI 对话吧</div>'; return; }
-  // 重渲染前记住用户已展开的折叠块（思考/工具），渲染后恢复：
-  // 否则 AI 每调用一次新工具整块重建，用户刚展开的就被收起
-  const openKeys = [];
-  box.querySelectorAll('details[data-k]').forEach(d=>{ if(d.open) openKeys.push(d.getAttribute('data-k')); });
   let html = '';
   let i = 0;
   while(i < aiConvMessages.length){
@@ -1119,14 +1132,12 @@ function renderAiMessages(){
     // 一轮 AI 回复：assistant 及其后的 tool 结果合并成一个气泡
     const start = i, turn = [];
     while(i < aiConvMessages.length && (aiConvMessages[i] || {}).role !== 'user'){ turn.push(aiConvMessages[i]); i++; }
-    html += aiTurnHtml(turn, start);
+    // 只有「正在生成中的最后一轮」默认展开过程，方便实时看进展
+    const live = aiStreaming && i >= aiConvMessages.length;
+    html += aiTurnHtml(turn, start, live);
   }
   box.innerHTML = html;
-  if(openKeys.length){
-    box.querySelectorAll('details[data-k]').forEach(d=>{
-      if(openKeys.indexOf(d.getAttribute('data-k')) >= 0) d.open = true;
-    });
-  }
+  aiBindFolds(box);
   scrollAiBottom();
 }
 // 撤回：删除该条及其之后的消息，并把该条内容放回输入框
@@ -1164,13 +1175,15 @@ function aiCopy(i){
   const m = aiConvMessages[i] || {};
   aiCopyText((typeof m.content === 'string') ? m.content : '');
 }
-// 复制一整轮 AI 回复（从 startIdx 起、直到下一条用户消息前的全部正文）
+// 复制本轮最终回答（与界面上单独显示的那一段一致，不含过程）
 function aiCopyTurn(startIdx){
   let text = '';
   for(let k = startIdx; k < aiConvMessages.length; k++){
     const m = aiConvMessages[k] || {};
     if(m.role === 'user') break;
-    if(typeof m.content === 'string' && m.content) text += (text ? '\\n\\n' : '') + m.content;
+    if(m.role === 'tool') continue;
+    if(m.tool_calls && m.tool_calls.length) continue;
+    if(typeof m.content === 'string' && m.content.trim()) text = m.content;
   }
   aiCopyText(text);
 }
@@ -1250,53 +1263,62 @@ function aiToggleUsage(ev){
   aiPositionUsagePop();
   setTimeout(function(){ document.addEventListener('click', aiCloseUsage); }, 0);
 }
-// 一整轮 AI 回复（assistant + 其后的工具结果）渲染成一个气泡。
-// 严格按 AI 实际发生的先后顺序排列：思考 → 正文 → 工具调用 → （下一段）思考 → …，
-// 即「先干什么就先显示什么」，不再把全部工具统一挪到最后。
+// 一整轮 AI 回复（assistant + 其后的工具结果）渲染成一个气泡，分成两块：
+//   ① 思考与工具调用过程：思考 / 中间输出 / 工具调用与结果，严格按 AI 实际发生的先后顺序，
+//      生成中默认展开便于实时查看，生成结束后默认收起（用户可手动展开）
+//   ② 最终回答：本轮最后一个 assistant 消息的正文，始终显示
 // 生成过程中不显示「AI」标签与「复制」按钮，避免运行时的重复标记。
-function aiTurnHtml(turn, startIdx){
+function aiTurnHtml(turn, startIdx, live){
   const resById = {};
   turn.forEach(function(m){ if(m && m.role === 'tool' && m.tool_call_id) resById[m.tool_call_id] = m; });
-  // 本轮工具调用总数：>1 时每批调用各自折叠，仍保持各自的先后位置
-  let totalTools = 0;
-  turn.forEach(function(m){ if(m && m.role !== 'tool' && m.tool_calls && m.tool_calls.length) totalTools += m.tool_calls.length; });
-  let parts = '', hasText = false;
+  // 最终回答 = 本轮最后一个「不带工具调用」的 assistant 消息的正文；其余正文都算过程
+  let ansIdx = -1;
+  for(let k = turn.length - 1; k >= 0; k--){
+    const m = turn[k] || {};
+    if(m.role === 'tool') continue;
+    if(m.tool_calls && m.tool_calls.length) continue;
+    if(typeof m.content === 'string' && m.content.trim()){ ansIdx = k; break; }
+  }
+  let proc = '', toolCount = 0, anyDenied = false;
   for(let k = 0; k < turn.length; k++){
     const m = turn[k] || {};
     if(m.role === 'tool') continue; // 结果已合并到对应「调用」处展示
     // 1) 思考
     if(m.reasoning){
-      parts += '<details class="ai-think" data-k="think-' + startIdx + '-' + k + '"><summary>思考过程</summary><div class="ai-think-body">' + esc(m.reasoning) + '</div></details>';
+      proc += '<div class="ai-proc-seg"><div class="ai-proc-tag">思考</div>' +
+        '<div class="ai-proc-text">' + esc(m.reasoning) + '</div></div>';
     }
-    // 2) 正文
-    if(m.content){ hasText = true; parts += '<div class="ai-body md">' + renderMd(m.content) + '</div>'; }
-    // 3) 本段之后的工具调用（紧跟在这段内容之后，保持真实顺序）
+    // 2) 中间输出（不是最终回答的正文）
+    if(m.content && k !== ansIdx){
+      proc += '<div class="ai-proc-seg"><div class="ai-proc-tag">输出</div>' +
+        '<div class="ai-body md">' + renderMd(m.content) + '</div></div>';
+    }
+    // 3) 工具调用与结果（保持紧跟在它发生的位置）
     if(m.tool_calls && m.tool_calls.length){
-      let batch = '', lastCall = '', denied = false;
       m.tool_calls.forEach(function(t){
         const f = t.function || {};
         const r = resById[t.id];
-        if(r && r.denied) denied = true;
-        const aStr = String(f.arguments == null ? '' : f.arguments).replace(/\\s+/g, ' ').trim().slice(0, 120);
-        lastCall = (f.name || '') + (aStr ? ' ' + aStr : '');
-        batch += aiToolMergedHtml(f.name, f.arguments, r);
+        if(r && r.denied) anyDenied = true;
+        toolCount++;
+        proc += aiToolMergedHtml(f.name, f.arguments, r);
       });
-      const fold = totalTools > 1 || m.tool_calls.length > 1;
-      if(fold){
-        const head = (m.tool_calls.length > 1 ? '调用工具 ' + m.tool_calls.length + ' 次' : '调用工具') +
-          (denied ? '（含被拒绝）' : '') +
-          (lastCall ? ' · <span class="ai-tools-last">' + esc(lastCall) + '</span>' : '');
-        parts += '<details class="ai-tools-fold" data-k="tools-' + startIdx + '-' + k + '"><summary>' + head + '</summary><div>' + batch + '</div></details>';
-      } else {
-        parts += batch;
-      }
     }
   }
-  const acts = (!aiStreaming && hasText)
+  const procKey = 'proc-' + startIdx;
+  const procHtml = proc
+    ? '<details class="ai-proc" data-k="' + procKey + '"' + aiFoldAttr(procKey, live) + '>' +
+        '<summary>思考与工具调用过程' + (toolCount ? '（' + toolCount + ' 次工具调用）' : '') +
+        (anyDenied ? '（含被拒绝）' : '') + '</summary>' +
+        '<div class="ai-proc-body">' + proc + '</div></details>'
+    : '';
+  const answerHtml = (ansIdx >= 0)
+    ? '<div class="ai-body md ai-answer">' + renderMd(turn[ansIdx].content) + '</div>'
+    : '';
+  const acts = (!aiStreaming && ansIdx >= 0)
     ? '<div class="ai-acts"><button title="复制本段回复内容" onclick="aiCopyTurn(' + startIdx + ')">复制</button></div>'
     : '';
   const whoHtml = aiStreaming ? '' : '<div class="ai-who">AI</div>';
-  return '<div class="ai-msg assistant">' + whoHtml + parts + acts + '</div>';
+  return '<div class="ai-msg assistant">' + whoHtml + procHtml + answerHtml + acts + '</div>';
 }
 function aiBubbleHtml(role, content, idx, m){
   m = m || {};
