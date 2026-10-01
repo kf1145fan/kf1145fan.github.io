@@ -957,6 +957,8 @@ const AI_TOOLS = [
   { type: "function", function: { name: "save_secret", description: "当用户在对话中直接给出了密钥/授权码/密码并要你保存时调用。name 为占位符名称（如 SMTP_PASS），value 为用户给出的真实值；保存后在写入文件或设置时用 {name} 引用。", parameters: { type: "object", properties: { name: { type: "string" }, value: { type: "string" } }, required: ["name", "value"] } } },
   { type: "function", function: { name: "request_secret", description: "当需要用户提供密钥/授权码/密码，但用户尚未在对话中提供时调用：系统会弹窗让用户在本地输入，输入内容不会发送给你，你只会收到是否设置成功的结果。切勿要求用户把密码直接发到对话里。", parameters: { type: "object", properties: { name: { type: "string", description: "占位符名称，如 SMTP_PASS" }, purpose: { type: "string", description: "用途说明，会展示给用户" } }, required: ["name"] } } },
   { type: "function", function: { name: "send_email", description: "使用已配置的 SMTP 发送邮件。默认发送单封给 to；若 broadcast=true 则群发给全部「已确认」的订阅者（忽略 to）。主题/正文必填，正文支持 HTML，可用 {{site}} {{email}} {{unsubscribe}} 变量。", parameters: { type: "object", properties: { to: { type: "string", description: "收件邮箱（发单封时必填）" }, subject: { type: "string" }, body: { type: "string", description: "正文，支持 HTML" }, broadcast: { type: "boolean", description: "true 时群发给全部已确认订阅者" } }, required: ["subject", "body"] } } },
+  { type: "function", function: { name: "http_get", description: "发起一个 HTTP GET 请求并返回状态码、响应头与响应体（用于抓取网页、调用 REST API）。", parameters: { type: "object", properties: { url: { type: "string", description: "完整 URL，必须以 http:// 或 https:// 开头" }, headers: { type: "object", description: "可选请求头键值对，如 {\"Accept\":\"application/json\"}" } }, required: ["url"] } } },
+  { type: "function", function: { name: "http_post", description: "发起一个 HTTP POST 请求并返回状态码、响应头与响应体（用于提交表单、调用需要写入的 REST API）。", parameters: { type: "object", properties: { url: { type: "string", description: "完整 URL，必须以 http:// 或 https:// 开头" }, body: { type: "string", description: "请求体文本（如 JSON 字符串）" }, contentType: { type: "string", description: "请求体类型，如 application/json、application/x-www-form-urlencoded；默认 text/plain" }, headers: { type: "object", description: "可选请求头键值对" } }, required: ["url"] } } },
 ];
 
 // set_setting 允许修改的设置项（站点功能走 wl_Settings，其余写入订阅/SMTP 配置）
@@ -968,7 +970,7 @@ const AI_SETTING_KEYS = [
 ];
 
 // 危险工具：需要「重要确认」及以上权限时需用户确认
-const AI_DANGER_TOOLS = ["write_file", "delete_file", "trigger_build", "set_setting", "save_secret", "send_email"];
+const AI_DANGER_TOOLS = ["write_file", "delete_file", "trigger_build", "set_setting", "save_secret", "send_email", "http_post"];
 
 // 生成工具使用说明（含可用密钥占位符名称，绝不含密钥值）
 async function aiToolsHint(db: D1Database): Promise<string> {
@@ -982,10 +984,51 @@ async function aiToolsHint(db: D1Database): Promise<string> {
     "凭据规则：绝对不要要求用户把密码/授权码直接发到对话里。若你确实需要而用户尚未提供，请调用 request_secret（系统会弹窗让用户本地输入，你不会看到内容）；若用户已在对话中直接把密码/授权码给了你并要你保存，请调用 save_secret 保存为占位符。",
     "可用 set_setting 修改的设置项 key：" + AI_SETTING_KEYS.join("、") + "。",
     "发邮件：用 send_email 发单封（to）或 broadcast=true 群发给已确认订阅者；需先在设置里配置 SMTP。发送前可先用 get_settings 确认 smtp.host 与 hasPass。",
+    "联网：用 http_get 抓取网页或调用 GET 类接口，用 http_post 提交数据或调用写入类接口（需 http(s):// 开头，可自定义 headers/contentType）。响应体会自动截断，超长内容请分页或改用接口的查询参数。",
     names.length
       ? "当前可用的密钥占位符：" + names.map((n) => "{" + n + "}").join("、")
       : "当前没有配置任何密钥占位符（管理员可在「设置 → AI 密钥」中添加）。",
   ].join("\n");
+}
+
+// 把 AI 传入的 headers 对象转成字符串键值对，并把其中 {NAME} 占位符替换为已保存的密钥
+function aiSecretHeaders(headers: unknown, secrets: SecretRow[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (headers && typeof headers === "object") {
+    for (const k of Object.keys(headers as Record<string, unknown>)) {
+      out[k] = applySecrets(String((headers as Record<string, unknown>)[k]), secrets);
+    }
+  }
+  return out;
+}
+
+// 发起外网 HTTP 请求（AI 的 http_get / http_post 工具）：返回状态码、响应头、响应体（超长截断）
+async function aiHttpRequest(
+  method: string,
+  url: string,
+  body: string,
+  headers: unknown,
+  contentType: string
+): Promise<string> {
+  try {
+    if (!/^https?:\/\//i.test(url)) return JSON.stringify({ ok: false, error: "url 必须以 http:// 或 https:// 开头" });
+    const h: Record<string, string> = {};
+    if (headers && typeof headers === "object") {
+      for (const k of Object.keys(headers as Record<string, unknown>)) h[k] = String((headers as Record<string, unknown>)[k]);
+    }
+    const hasCT = Object.keys(h).some((k) => k.toLowerCase() === "content-type");
+    if (method === "POST" && contentType && !hasCT) h["Content-Type"] = contentType;
+    const t0 = Date.now();
+    const r = await fetch(url, { method, headers: h, body: method === "POST" ? body || "" : undefined, redirect: "follow" });
+    const ms = Date.now() - t0;
+    const text = await r.text().catch(() => "");
+    const out = text.length > 100000 ? text.slice(0, 100000) + "\n...(内容过长已截断)" : text;
+    const rh: Record<string, string> = {};
+    r.headers.forEach((v, k) => { rh[k] = v; });
+    return JSON.stringify({ ok: r.ok, status: r.status, ms, headers: rh, body: out });
+  } catch (e) {
+    return JSON.stringify({ ok: false, error: e instanceof Error ? e.message : String(e) });
+  }
 }
 
 // 执行工具，返回给 AI 的文本结果（JSON 字符串）
@@ -1122,6 +1165,16 @@ async function aiRunTool(env: Bindings, name: string, args: Record<string, unkno
         return JSON.stringify({ ok: false, error: e instanceof Error ? e.message : String(e) });
       }
     }
+    case "http_get":
+      return await aiHttpRequest("GET", s("url"), "", aiSecretHeaders(args.headers, secrets), "");
+    case "http_post":
+      return await aiHttpRequest(
+        "POST",
+        s("url"),
+        applySecrets(s("body"), secrets),
+        aiSecretHeaders(args.headers, secrets),
+        s("contentType")
+      );
     default:
       return JSON.stringify({ ok: false, error: "未知工具：" + name });
   }

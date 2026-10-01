@@ -222,6 +222,16 @@ a{color:var(--accent);text-decoration:none}
 .ai-proc-text{white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere;line-height:1.7}
 /* 最终回答：与过程分开，始终显示 */
 .ai-answer{margin:0}
+/* 单个工具调用 + 结果：可单独展开收起 */
+.ai-tool-fold{border:1px solid var(--border);border-radius:2px;margin:0 0 6px;background:var(--card)}
+.ai-tool-fold>summary{cursor:pointer;padding:5px 8px;list-style:none;outline:none;word-break:break-word}
+.ai-tool-fold>summary::-webkit-details-marker{display:none}
+.ai-tool-fold>summary:before{content:'▸ ';color:var(--muted)}
+.ai-tool-fold[open]>summary:before{content:'▾ '}
+.ai-tool-fold-body{padding:0 8px 8px}
+.ai-tool-fold-sec{margin:0 0 6px}
+.ai-tool-fold-pre{white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere;line-height:1.6;max-height:240px;overflow:auto;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11.5px}
+.ai-tool-fold-pre.err{color:#d9534f}
 /* 等待模型响应：首个输出片段到达后隐藏 */
 .ai-wait{font-size:12.5px;color:var(--muted);padding:2px 0;animation:aiWaitPulse 1.2s ease-in-out infinite}
 @keyframes aiWaitPulse{0%,100%{opacity:.45}50%{opacity:1}}
@@ -265,10 +275,6 @@ a{color:var(--accent);text-decoration:none}
 .ai-tool-note{font-size:12px;color:var(--muted);border-left:2px solid var(--border);padding:4px 10px;margin:0;word-break:break-all;background:var(--hover)}
 .ai-tool-note.err{border-left-color:#dc2626}
 .ai-tool-tag{display:inline-block;font-size:11px;padding:0 6px;margin-right:6px;border:1px solid var(--border);border-radius:2px;color:var(--muted)}
-.ai-tool-call{font-size:12px;color:var(--muted);margin-top:6px;word-break:break-all}
-.ai-tool-call+.ai-tool-call{margin-top:8px;padding-top:8px;border-top:1px dashed var(--border)}
-.ai-tool-res{font-size:12px;color:var(--muted);margin-top:2px;word-break:break-all}
-.ai-tool-res.err{color:var(--danger)}
 .ai-tool-inline{opacity:.8}
 .ai-tool-confirm{border:1px solid var(--accent);border-radius:2px;padding:10px 12px;background:var(--card)}
 .ai-tool-head{font-size:13px;font-weight:600;margin-bottom:6px}
@@ -817,14 +823,20 @@ async function loadAiChat(){
     if(sel){
       const list = (Array.isArray(d.models) && d.models.length) ? d.models : (d.model ? [d.model] : []);
       const sig = list.join('|');
-      // 仅在可选模型发生变化时重建下拉，保留用户当前选择
+      // 仅在可选模型发生变化时重建下拉
       if(sel.dataset.sig !== sig){
         sel.dataset.sig = sig;
         sel.innerHTML = list.length
           ? list.map(m => '<option value="' + esc(m) + '">' + esc(m) + '</option>').join('')
           : '<option value="">（未配置模型）</option>';
-        if(d.model && list.indexOf(d.model) >= 0) sel.value = d.model;
       }
+      // 记住用户在该聊天页选择的模型：优先恢复上次选择，否则用默认（第一个已选模型）
+      let saved = '';
+      try{ saved = localStorage.getItem('aiChatModel') || ''; }catch(e){}
+      const want = (saved && list.indexOf(saved) >= 0)
+        ? saved
+        : (d.model && list.indexOf(d.model) >= 0 ? d.model : (list[0] || ''));
+      sel.value = want;
     }
     aiUpdateHint();
   }catch(e){}
@@ -875,6 +887,10 @@ async function aiSetPermission(v){
   const sel = $('#aiChatPermission'); if(sel && sel.value !== aiPermission) sel.value = aiPermission;
   aiLoadTools();
   try{ await api('/admin/api/ai/settings', { method:'PUT', body: JSON.stringify({ permission: aiPermission }) }); }catch(e){}
+}
+// 记录用户在聊天页选择的模型（localStorage），刷新后仍生效
+function aiSetChatModel(v){
+  try{ localStorage.setItem('aiChatModel', String(v || '')); }catch(e){}
 }
 // 读取本地偏好：思考强度、全屏
 function aiLoadPrefs(){
@@ -1191,19 +1207,23 @@ function aiCopyTurn(startIdx){
   }
   aiCopyText(text);
 }
-// 单个工具：调用与结果合并展示（一行调用 + 紧随其后的结果）
-function aiToolMergedHtml(name, args, r){
+// 单个工具：一次调用 + 它的结果，默认收起，展开后可见完整参数与返回内容
+function aiToolFoldHtml(name, args, r, key){
   const denied = !!(r && r.denied);
-  const argsStr = String(args == null ? '' : args).replace(/\\s+/g, ' ').trim().slice(0, 300);
-  const resStr = r ? String(r.content == null ? '' : r.content).replace(/\\s+/g, ' ').trim().slice(0, 300) : '';
-  let s = '<div class="ai-tool-call"><span class="ai-tool-tag">调用</span>' + esc(name || '');
-  if(argsStr) s += ' <span class="ai-tool-inline">' + esc(argsStr) + '</span>';
+  const argsFull = String(args == null ? '' : args).trim();
+  const argsBrief = argsFull.replace(/\\s+/g, ' ').slice(0, 120);
+  const resFull = r ? String(r.content == null ? '' : r.content).trim() : '';
+  let head = '<span class="ai-tool-tag">调用</span>' + esc(name || '');
+  if(argsBrief) head += ' <span class="ai-tool-inline">' + esc(argsBrief) + '</span>';
+  if(denied) head += ' <span class="ai-tool-tag err">已拒绝</span>';
+  let body = '<div class="ai-tool-fold-sec"><div class="ai-proc-tag">参数</div>' +
+    '<div class="ai-tool-fold-pre">' + esc(argsFull || '{}') + '</div></div>';
   if(r){
-    s += '<div class="ai-tool-res' + (denied ? ' err' : '') + '"><span class="ai-tool-tag">' +
-      (denied ? '已拒绝' : '结果') + '</span>' + (resStr ? esc(resStr) : '（空）') + '</div>';
+    body += '<div class="ai-tool-fold-sec"><div class="ai-proc-tag">' + (denied ? '已拒绝' : '返回结果') + '</div>' +
+      '<div class="ai-tool-fold-pre' + (denied ? ' err' : '') + '">' + esc(resFull || '（空）') + '</div></div>';
   }
-  s += '</div>';
-  return s;
+  return '<details class="ai-tool-fold" data-k="' + key + '"' + aiFoldAttr(key, false) + '><summary>' +
+    head + '</summary><div class="ai-tool-fold-body">' + body + '</div></details>';
 }
 // 汇总用量：兼容 OpenAI（prompt_tokens_details.cached_tokens）与 DeepSeek（prompt_cache_hit_tokens）
 function aiAccUsage(acc, u){
@@ -1329,13 +1349,13 @@ function aiTurnHtml(turn, startIdx, live){
         const r = resById[t.id];
         if(r && r.denied) anyDenied = true;
         toolCount++;
-        proc += aiToolMergedHtml(f.name, f.arguments, r);
+        proc += aiToolFoldHtml(f.name, f.arguments, r, 'tool-' + startIdx + '-' + k + '-' + toolCount);
       });
     }
   }
   const procKey = 'proc-' + startIdx;
   const procHtml = proc
-    ? '<details class="ai-proc" data-k="' + procKey + '"' + aiFoldAttr(procKey, live) + '>' +
+    ? '<details class="ai-proc" data-k="' + procKey + '"' + aiFoldAttr(procKey, live || ansIdx < 0) + '>' +
         '<summary>思考与工具调用过程' + (toolCount ? '（' + toolCount + ' 次工具调用）' : '') +
         (anyDenied ? '（含被拒绝）' : '') + '</summary>' +
         '<div class="ai-proc-body">' + proc + '</div></details>'
@@ -2900,7 +2920,7 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
         <div class="msg" id="aiChatMsg" style="margin:0 14px"></div>
         <div class="ai-foot">
           <span class="wk-label" style="margin:0">模型</span>
-          <select class="wk-input" id="aiChatModel" style="width:auto;flex:1 1 140px;min-width:80px;max-width:320px;padding:4px 8px"></select>
+          <select class="wk-input" id="aiChatModel" onchange="aiSetChatModel(this.value)" style="width:auto;flex:1 1 140px;min-width:80px;max-width:320px;padding:4px 8px"></select>
           <span class="wk-label" style="margin:0">权限</span>
           <select class="wk-input" id="aiChatPermission" onchange="aiSetPermission(this.value)" title="权限：安全=仅对话；重要=危险操作确认；全部=每步确认；完全=无需确认" style="width:auto;flex:0 0 auto;min-width:0;padding:4px 8px">
             <option value="safe" title="安全访问 · 仅对话">安全</option>
