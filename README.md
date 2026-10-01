@@ -69,6 +69,7 @@
 | Variable | 说明 |
 | --- | --- |
 | `SITE_URL` | 你的博客对外域名（如 `https://blog.example.com`）。设置后：构建时用它作站点地址、发布通知回调到它、评论 `SECURE_DOMAINS` 用它 |
+| `D1_DATABASE_ID` | 你的 D1 数据库 id。**一般不用填**：只有 `CF_API_TOKEN` 没有 `D1:Edit` 权限、无法自动查询时才需要手动指定 |
 
 不设置也能跑：站点地址会按仓库自动推导为 `https://<owner>.github.io`。
 
@@ -84,6 +85,7 @@ database_id   = "00000000-0000-0000-0000-000000000000"   # 占位符，部署时
 migrations_dir = "migrations"
 ```
 
+> 自动查询/创建依赖 `CF_API_TOKEN` 具备 **`D1: Edit`** 权限。若你的 Token 没有该权限，改为在仓库 Variables 里设置 `D1_DATABASE_ID`（在 Cloudflare 控制台 D1 页面可看到 id），部署时就不调 API 了。
 > 如果你在 Cloudflare 已有同名库会自动复用；没有则自动新建。想换库名，改 `database_name` 即可。
 
 ### 6. 访问地址（workers.dev / 自定义域名）

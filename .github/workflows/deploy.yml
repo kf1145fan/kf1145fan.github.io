@@ -21,24 +21,28 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          D1_DATABASE_ID_VAR: ${{ vars.D1_DATABASE_ID }}
         run: |
           set -e
           DB_NAME="waline-db"
-          API="https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/d1/database"
-          fetch() { curl -s "$API" -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN"; }
-          RESP="$(fetch || true)"
-          echo "D1 list: ${RESP:0:400}"
-          ID="$(printf '%s' "$RESP" | jq -r --arg n "$DB_NAME" '.result[]? | select(.name==$n) | .uuid' 2>/dev/null | head -1)"
-          if [ -z "$ID" ] || [ "$ID" = "null" ]; then
-            echo "未找到 D1 库 $DB_NAME，正在创建..."
-            CRESP="$(curl -s -X POST "$API" -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-              -H "Content-Type: application/json" -d "{\"name\":\"$DB_NAME\"}" || true)"
-            echo "D1 create: ${CRESP:0:400}"
+          ID="${D1_DATABASE_ID_VAR:-}"
+          if [ -n "$ID" ]; then echo "使用仓库变量 D1_DATABASE_ID=$ID"; fi
+          if [ -z "$ID" ]; then
+            API="https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/d1/database"
+            fetch() { curl -s "$API" -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN"; }
             RESP="$(fetch || true)"
             ID="$(printf '%s' "$RESP" | jq -r --arg n "$DB_NAME" '.result[]? | select(.name==$n) | .uuid' 2>/dev/null | head -1)"
-          fi
-          if [ -z "$ID" ] || [ "$ID" = "null" ]; then
-            echo "::error::无法获取 D1 数据库 id，请检查 CF_API_TOKEN 是否具备 D1:Edit 权限"; exit 1
+            if [ -z "$ID" ] || [ "$ID" = "null" ]; then
+              echo "未找到 D1 库 $DB_NAME，尝试创建..."
+              curl -s -X POST "$API" -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+                -H "Content-Type: application/json" -d "{\"name\":\"$DB_NAME\"}" >/dev/null || true
+              RESP="$(fetch || true)"
+              ID="$(printf '%s' "$RESP" | jq -r --arg n "$DB_NAME" '.result[]? | select(.name==$n) | .uuid' 2>/dev/null | head -1)"
+            fi
+            if [ -z "$ID" ] || [ "$ID" = "null" ]; then
+              echo "::error::无法自动获取 D1 id（响应：${RESP:0:200}）。请在 CF_API_TOKEN 勾选 D1:Edit，或设置仓库变量 D1_DATABASE_ID"
+              exit 1
+            fi
           fi
           echo "id=$ID" >> $GITHUB_OUTPUT
           echo "D1 id -> $ID"

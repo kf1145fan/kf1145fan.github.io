@@ -21,31 +21,35 @@ jobs:
         working-directory: blog-worker
         run: npm install
 
-      # D1 数据库：自动查询同名库的 id；不存在则创建，然后把 wrangler.toml 里的占位符换成真实 id。
-      # 这样任何人 fork 后都不用改 wrangler.toml。
+      # D1 数据库：优先用仓库变量 D1_DATABASE_ID；没有则自动查询/创建同名库并回填 id。
+      # 自动查询需要 CF_API_TOKEN 具备 D1:Edit 权限；若 Token 没这个权限，直接设置变量 D1_DATABASE_ID 即可。
       - name: Ensure D1 database (自动创建/查询并回填 database_id)
         working-directory: blog-worker
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          D1_DATABASE_ID_VAR: ${{ vars.D1_DATABASE_ID }}
         run: |
           set -e
           DB_NAME="waline-db"
-          API="https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/d1/database"
-          fetch() { curl -s "$API" -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN"; }
-          RESP="$(fetch || true)"
-          echo "D1 list: ${RESP:0:400}"
-          ID="$(printf '%s' "$RESP" | jq -r --arg n "$DB_NAME" '.result[]? | select(.name==$n) | .uuid' 2>/dev/null | head -1)"
-          if [ -z "$ID" ] || [ "$ID" = "null" ]; then
-            echo "未找到 D1 库 $DB_NAME，正在创建..."
-            CRESP="$(curl -s -X POST "$API" -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-              -H "Content-Type: application/json" -d "{\"name\":\"$DB_NAME\"}" || true)"
-            echo "D1 create: ${CRESP:0:400}"
+          ID="${D1_DATABASE_ID_VAR:-}"
+          if [ -n "$ID" ]; then echo "使用仓库变量 D1_DATABASE_ID=$ID"; fi
+          if [ -z "$ID" ]; then
+            API="https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/d1/database"
+            fetch() { curl -s "$API" -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN"; }
             RESP="$(fetch || true)"
             ID="$(printf '%s' "$RESP" | jq -r --arg n "$DB_NAME" '.result[]? | select(.name==$n) | .uuid' 2>/dev/null | head -1)"
-          fi
-          if [ -z "$ID" ] || [ "$ID" = "null" ]; then
-            echo "::error::无法获取 D1 数据库 id，请检查 CF_API_TOKEN 是否具备 D1:Edit 权限"; exit 1
+            if [ -z "$ID" ] || [ "$ID" = "null" ]; then
+              echo "未找到 D1 库 $DB_NAME，尝试创建..."
+              curl -s -X POST "$API" -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+                -H "Content-Type: application/json" -d "{\"name\":\"$DB_NAME\"}" >/dev/null || true
+              RESP="$(fetch || true)"
+              ID="$(printf '%s' "$RESP" | jq -r --arg n "$DB_NAME" '.result[]? | select(.name==$n) | .uuid' 2>/dev/null | head -1)"
+            fi
+            if [ -z "$ID" ] || [ "$ID" = "null" ]; then
+              echo "::error::无法自动获取 D1 id（响应：${RESP:0:200}）。请在 CF_API_TOKEN 勾选 D1:Edit，或设置仓库变量 D1_DATABASE_ID"
+              exit 1
+            fi
           fi
           sed -i "s/00000000-0000-0000-0000-000000000000/$ID/g" wrangler.toml
           echo "D1 database_id -> $ID"
