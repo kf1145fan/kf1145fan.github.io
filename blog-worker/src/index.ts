@@ -818,6 +818,8 @@ app.post("/admin/api/ai/chat", async (c) => {
         model,
         messages: msgs,
         stream: true,
+        // 让上游在流末尾附带 usage（token 用量 / 缓存命中），供前端展示
+        stream_options: { include_usage: true },
         ...(tools && tools.length ? { tools, tool_choice: "auto" } : {}),
         ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
       }),

@@ -217,6 +217,11 @@ a{color:var(--accent);text-decoration:none}
 .ai-tools-fold>summary{cursor:pointer;font-size:12px;color:var(--muted);padding:6px 10px;outline:none}
 .ai-tools-fold>summary:hover{color:var(--fg)}
 .ai-tools-fold>div{padding:0 10px 8px;max-height:320px;overflow:auto}
+/* 折叠状态也能看到最新一次工具调用（不含返回结果） */
+.ai-tools-fold>summary .ai-tools-last{opacity:.8}
+/* 用量：已使用 / 缓存命中 */
+.ai-usage{display:flex;gap:12px;flex-wrap:wrap;font-size:11px;color:var(--muted);margin-top:2px}
+.ai-usage b{font-weight:600;color:var(--fg)}
 .ai-input{display:flex;gap:8px;align-items:flex-end;padding:8px 14px 12px;flex-shrink:0}
 /* 输入框不显示拖拽手柄：随内容自动向上增高（到上限后内部滚动） */
 .ai-input textarea{flex:1;resize:none;min-height:34px;max-height:220px;overflow-y:hidden;border-radius:2px}
@@ -1160,23 +1165,47 @@ function aiToolMergedHtml(name, args, r){
   s += '</div>';
   return s;
 }
+// 汇总用量：兼容 OpenAI（prompt_tokens_details.cached_tokens）与 DeepSeek（prompt_cache_hit_tokens）
+function aiAccUsage(acc, u){
+  if(!u || typeof u !== 'object') return;
+  acc.has = true;
+  acc.prompt += (+u.prompt_tokens || 0);
+  acc.completion += (+u.completion_tokens || 0);
+  acc.total += (+u.total_tokens || ((+u.prompt_tokens || 0) + (+u.completion_tokens || 0)));
+  acc.cached += ((u.prompt_tokens_details && +u.prompt_tokens_details.cached_tokens) || (+u.prompt_cache_hit_tokens) || 0);
+}
+function aiFmtNum(n){ n = +n || 0; return String(n).replace(/\\B(?=(\\d{3})+(?!\\d))/g, ','); }
+// 用量行：已使用 token、缓存命中（无数据时不显示）
+function aiUsageHtml(u){
+  if(!u || !u.has) return '';
+  let s = '<div class="ai-usage"><span>已使用 <b>' + aiFmtNum(u.total) + '</b> tokens</span>';
+  if(u.cached > 0) s += '<span>缓存命中 <b>' + aiFmtNum(u.cached) + '</b> tokens</span>';
+  s += '</div>';
+  return s;
+}
 // 一整轮 AI 回复（assistant + 其后的工具结果）渲染成一个气泡：
-// 只在最上面显示一次「AI」、最下面显示一次「复制」，工具调用与结果合并
+// 顺序为 思考 → 正文 → 工具调用（在 AI 说的话下面）→ 操作 → 用量。
+// 生成过程中不显示「AI」标签与「复制」按钮，避免运行时的重复标记。
 function aiTurnHtml(turn, startIdx){
   const resById = {};
   turn.forEach(function(m){ if(m && m.role === 'tool' && m.tool_call_id) resById[m.tool_call_id] = m; });
-  let think = '', body = '', tools = '', hasText = false, toolCount = 0, anyDenied = false;
+  let think = '', body = '', tools = '', hasText = false, toolCount = 0, anyDenied = false, lastCall = '';
+  const usage = { has:false, total:0, cached:0, prompt:0, completion:0 };
   for(let k = 0; k < turn.length; k++){
     const m = turn[k] || {};
     if(m.role === 'tool') continue; // 已在其「调用」处合并展示
     if(m.reasoning) think += (think ? '\\n\\n' : '') + m.reasoning;
     if(m.content){ hasText = true; body += '<div class="ai-body md">' + renderMd(m.content) + '</div>'; }
+    if(m.usage) aiAccUsage(usage, m.usage);
     if(m.tool_calls && m.tool_calls.length){
       m.tool_calls.forEach(function(t){
         const f = t.function || {};
         const r = resById[t.id];
         if(r && r.denied) anyDenied = true;
         toolCount++;
+        // 记录最新一次调用，供折叠状态下在摘要行展示（不展示返回结果）
+        const aStr = String(f.arguments == null ? '' : f.arguments).replace(/\\s+/g, ' ').trim().slice(0, 120);
+        lastCall = (f.name || '') + (aStr ? ' ' + aStr : '');
         tools += aiToolMergedHtml(f.name, f.arguments, r);
       });
     }
@@ -1186,13 +1215,15 @@ function aiTurnHtml(turn, startIdx){
     : '';
   const toolsHtml = tools
     ? (toolCount > 1
-        ? '<details class="ai-tools-fold" data-k="tools-' + startIdx + '"><summary>调用工具 ' + toolCount + ' 次' + (anyDenied ? '（含被拒绝）' : '') + '</summary><div>' + tools + '</div></details>'
+        ? '<details class="ai-tools-fold" data-k="tools-' + startIdx + '"><summary>调用工具 ' + toolCount + ' 次' + (anyDenied ? '（含被拒绝）' : '') +
+            (lastCall ? ' · <span class="ai-tools-last">最新：' + esc(lastCall) + '</span>' : '') + '</summary><div>' + tools + '</div></details>'
         : tools)
     : '';
-  const acts = hasText
+  const acts = (!aiStreaming && hasText)
     ? '<div class="ai-acts"><button title="复制本段回复内容" onclick="aiCopyTurn(' + startIdx + ')">复制</button></div>'
     : '';
-  return '<div class="ai-msg assistant"><div class="ai-who">AI</div>' + thinkHtml + toolsHtml + body + acts + '</div>';
+  const whoHtml = aiStreaming ? '' : '<div class="ai-who">AI</div>';
+  return '<div class="ai-msg assistant">' + whoHtml + thinkHtml + body + toolsHtml + acts + aiUsageHtml(usage) + '</div>';
 }
 function aiBubbleHtml(role, content, idx, m){
   m = m || {};
@@ -1256,7 +1287,7 @@ async function aiAgentLoop(){
   aiSetSendState(true);
   const msg = $('#aiChatMsg'); if(msg){ msg.className = 'msg'; msg.textContent = ''; }
   aiAbort = new AbortController();
-  let rounds = 0;
+  let rounds = 0, finished = false;
   try{
     while(rounds < AI_MAX_ROUNDS){
       rounds++;
@@ -1264,17 +1295,25 @@ async function aiAgentLoop(){
       const lastRound = rounds >= AI_MAX_ROUNDS;
       renderAiMessages();
       const box = $('#aiCol');
-      if(box) box.insertAdjacentHTML('beforeend', '<div class="ai-msg assistant"><div class="ai-who">AI</div>'+
+      // 生成中的临时气泡：不显示「AI」标签
+      if(box) box.insertAdjacentHTML('beforeend', '<div class="ai-msg assistant">'+
         (aiThink ? '<details class="ai-think" id="aiCurThink" open><summary>思考中…</summary><div class="ai-think-body"></div></details>' : '')+
         '<div class="ai-body md" id="aiCurBody"></div></div>');
       scrollAiBottom();
       const bodyEl = box ? box.querySelector('#aiCurBody') : null;
       const thinkEl = box ? box.querySelector('#aiCurThink') : null;
+      const ui = { bodyEl: bodyEl, thinkEl: thinkEl, acc: '' };
       let res;
       try{
-        res = await aiStreamRound(modelName, { bodyEl: bodyEl, thinkEl: thinkEl }, lastRound);
+        res = await aiStreamRound(modelName, ui, lastRound);
       }catch(e){
-        if(e && e.name === 'AbortError'){ if(msg){ msg.className = 'msg'; msg.textContent = '已停止生成'; } break; }
+        if(e && e.name === 'AbortError'){
+          if(msg){ msg.className = 'msg'; msg.textContent = '已停止生成'; }
+          // 停止时保留已生成的部分内容，重渲染后仍可见
+          if(ui.acc){ aiConvMessages.push({ role:'assistant', content: ui.acc }); }
+          finished = true;
+          break;
+        }
         const err = (e && e.message) ? e.message : String(e);
         const hint = aiChatProxyOn() ? '（前端代理请求失败：服务商可能不允许跨域）' : '';
         if(msg){ msg.className = 'msg err'; msg.textContent = '请求失败：' + err + hint; }
@@ -1288,6 +1327,7 @@ async function aiAgentLoop(){
           tool_calls: res.toolCalls.map(function(t){ return { id:t.id, type:'function', function:{ name:t.name, arguments:t.arguments } }; })
         };
         if(aiThink && res.reasoning) am.reasoning = res.reasoning;
+        if(res.usage) am.usage = res.usage;
         aiConvMessages.push(am);
         renderAiMessages();
         for(let k=0; k<res.toolCalls.length; k++){
@@ -1319,25 +1359,28 @@ async function aiAgentLoop(){
       }
       const fm = { role:'assistant', content: res.content || (lastRound ? '（工具调用次数已达本轮上限，请回复「继续」以接着处理）' : '') };
       if(aiThink && res.reasoning) fm.reasoning = res.reasoning;
+      if(res.usage) fm.usage = res.usage;
       aiConvMessages.push(fm);
-      renderAiMessages();
+      finished = true;
       break;
     }
   }finally{
     aiStreaming = false; aiAbort = null;
     aiSetSendState(false);
+    // 生成结束（非中断/异常）后重渲染一次：恢复「AI」标签与「复制」按钮
+    if(finished) renderAiMessages();
   }
   await aiSaveConversation();
   scrollAiBottom();
 }
-// 清理历史消息：去掉仅供前端展示的字段，避免上游接口报错
+// 清理历史消息：去掉仅供前端展示的字段（思考/拒绝/用量），避免上游接口报错
 function aiCleanMsg(m){
-  if(!m || (m.reasoning === undefined && m.denied === undefined)) return m;
+  if(!m || (m.reasoning === undefined && m.denied === undefined && m.usage === undefined)) return m;
   const c = {};
-  for(const k in m){ if(k !== 'reasoning' && k !== 'denied') c[k] = m[k]; }
+  for(const k in m){ if(k !== 'reasoning' && k !== 'denied' && k !== 'usage') c[k] = m[k]; }
   return c;
 }
-// 流式请求一轮，返回 {content, toolCalls, reasoning}
+// 流式请求一轮，返回 {content, toolCalls, reasoning, usage}
 async function aiStreamRound(modelName, ui, noTools){
   // 系统提示词（AI 提示词）+ 工具使用说明：仅在请求时附加，不写入历史
   const sysParts = [];
@@ -1345,7 +1388,8 @@ async function aiStreamRound(modelName, ui, noTools){
   if(aiToolsHint && !noTools) sysParts.push(aiToolsHint);
   const hist = aiConvMessages.map(aiCleanMsg);
   const reqMessages = sysParts.length ? [{ role:'system', content: sysParts.join('\\n\\n') }].concat(hist) : hist;
-  const payload = { messages: reqMessages, model: modelName };
+  // stream_options.include_usage：让上游在流末尾附带 usage（token 用量/缓存命中）
+  const payload = { messages: reqMessages, model: modelName, stream_options: { include_usage: true } };
   // 思考强度：作为 reasoning_effort 一并发给服务商（关闭时不发送）
   if(aiThink) payload.reasoning_effort = aiThinkLevel;
   // 收尾轮不带工具，让模型直接输出文字总结
@@ -1381,7 +1425,7 @@ async function aiStreamRound(modelName, ui, noTools){
   }
   const reader = resp.body.getReader();
   const dec = new TextDecoder();
-  let buf = '', acc = '', reasonAcc = '', lastPaint = 0;
+  let buf = '', acc = '', reasonAcc = '', lastPaint = 0, usageAcc = null;
   const toolAcc = {};
   while(true){
     const chunk = await reader.read();
@@ -1396,6 +1440,8 @@ async function aiStreamRound(modelName, ui, noTools){
       if(pl === '[DONE]'){ buf = ''; break; }
       let j;
       try{ j = JSON.parse(pl); }catch(e){ continue; }
+      // usage 可能在末尾单独一帧（choices 为空）返回，需在取 delta 之前解析
+      if(j.usage) usageAcc = j.usage;
       const delta = j.choices && j.choices[0] && j.choices[0].delta;
       if(!delta) continue;
       // 思考模式：保留模型返回的推理内容（reasoning_content / reasoning）
@@ -1408,6 +1454,7 @@ async function aiStreamRound(modelName, ui, noTools){
       }
       if(delta.content){
         acc += delta.content;
+        if(ui) ui.acc = acc; // 暴露给调用方，停止时可保留部分内容
         const now = Date.now();
         if(ui && ui.bodyEl && (now - lastPaint > 80)){ lastPaint = now; ui.bodyEl.innerHTML = renderMd(acc); scrollAiBottom(); }
       }
@@ -1434,7 +1481,7 @@ async function aiStreamRound(modelName, ui, noTools){
   if(ui && ui.bodyEl) ui.bodyEl.innerHTML = renderMd(acc);
   if(aiThink && ui && ui.thinkEl && !reasonAcc) ui.thinkEl.style.display = 'none';
   scrollAiBottom();
-  return { content: acc, toolCalls: toolCalls, reasoning: reasonAcc };
+  return { content: acc, toolCalls: toolCalls, reasoning: reasonAcc, usage: usageAcc };
 }
 // 危险操作确认卡片（返回 Promise：允许=true / 拒绝=false）
 function aiAskConfirm(name, args){
