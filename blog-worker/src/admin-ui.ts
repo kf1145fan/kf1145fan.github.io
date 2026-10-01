@@ -215,7 +215,7 @@ a{color:var(--accent);text-decoration:none}
 .ai-tools-fold{border:1px solid var(--border);border-radius:2px;background:var(--hover);margin:4px 0}
 .ai-tools-fold>summary{cursor:pointer;font-size:12px;color:var(--muted);padding:6px 10px;outline:none}
 .ai-tools-fold>summary:hover{color:var(--fg)}
-.ai-tools-fold>div{padding:0 10px 8px}
+.ai-tools-fold>div{padding:0 10px 8px;max-height:320px;overflow:auto}
 .ai-input{display:flex;gap:8px;align-items:flex-end;padding:8px 14px 12px;flex-shrink:0}
 /* 输入框不显示拖拽手柄：随内容自动向上增高（到上限后内部滚动） */
 .ai-input textarea{flex:1;resize:none;min-height:34px;max-height:220px;overflow-y:hidden;border-radius:2px}
@@ -243,11 +243,28 @@ a{color:var(--accent);text-decoration:none}
 .ai-tool-note.err{border-left-color:#dc2626}
 .ai-tool-tag{display:inline-block;font-size:11px;padding:0 6px;margin-right:6px;border:1px solid var(--border);border-radius:2px;color:var(--muted)}
 .ai-tool-call{font-size:12px;color:var(--muted);margin-top:6px;word-break:break-all}
+.ai-tool-call+.ai-tool-call{margin-top:8px;padding-top:8px;border-top:1px dashed var(--border)}
+.ai-tool-res{font-size:12px;color:var(--muted);margin-top:2px;word-break:break-all}
+.ai-tool-res.err{color:var(--danger)}
 .ai-tool-inline{opacity:.8}
 .ai-tool-confirm{border:1px solid var(--accent);border-radius:2px;padding:10px 12px;background:var(--card)}
 .ai-tool-head{font-size:13px;font-weight:600;margin-bottom:6px}
 .ai-tool-pre{margin:0;max-height:200px;overflow:auto;font-size:12px;white-space:pre-wrap;word-break:break-all;background:var(--hover);padding:8px;border-radius:2px}
-@media(max-width:640px){.ai-chat{height:auto}.ai-side{position:absolute;top:0;left:0;bottom:0;width:min(78vw,260px);z-index:6;transition:transform .26s ease}.ai-chat.side-off .ai-side{width:min(78vw,260px);padding:12px;border-right-width:1px;transform:translateX(-100%)}.ai-scroll{min-height:300px}}
+@media(max-width:640px){
+/* 手机端：聊天区占满可视高度，输入框贴到屏幕底部（精确高度由 aiFitHeight() 计算，此处为兜底） */
+.ai-chat{height:calc(100dvh - 114px);min-height:0;border-radius:0}
+.ai-side{position:absolute;top:0;left:0;bottom:0;width:min(78vw,260px);z-index:6;transition:transform .26s ease}
+.ai-chat.side-off .ai-side{width:min(78vw,260px);padding:12px;border-right-width:1px;transform:translateX(-100%)}
+.ai-scroll{min-height:0}
+/* 进入 AI 页时不保留容器下边距，避免底部出现可滚动的空隙 */
+.wk-wrap:has(#page-ai:not(.hidden)){margin-bottom:0}
+/* 控制行：隐藏文字标签，选择器尽量紧凑，单行不换行（不够时横向滑动） */
+.ai-foot{gap:6px;padding:6px 10px 0;flex-wrap:nowrap;overflow-x:auto;flex-shrink:0}
+.ai-foot .wk-label{display:none}
+.ai-foot select.wk-input{flex:0 0 auto!important;width:auto!important;min-width:0!important;max-width:38vw!important;padding:3px 4px!important;font-size:12px;text-overflow:ellipsis}
+#aiChatModel{max-width:34vw!important}
+.ai-input{padding:6px 10px calc(6px + env(safe-area-inset-bottom))}
+}
 `;
 
 const SCRIPT = `
@@ -333,7 +350,7 @@ function go(name){
     if(name==='build') loadBuildHistory();
     if(name==='visit') loadVisit();
     if(name==='subscribe') loadSubscribe();
-    if(name==='ai') loadAiChat();
+    if(name==='ai'){ loadAiChat(); aiFitHeight(); }
     if(name==='settings'){ loadSubscribeSettings(); loadSiteSettings(); loadAiSettings(); loadSecrets(); }
     window.scrollTo(0,0);
   }
@@ -732,6 +749,7 @@ let aiPermission = 'safe';    // 权限级别：safe 安全访问 / important �
 let aiTools = null;           // 工具定义（权限非安全时加载）
 let aiToolsHint = '';         // 工具使用说明（含密钥占位符名称）
 let aiToolDanger = [];        // 危险工具名单
+const AI_MAX_ROUNDS = 50;     // 单轮AI回复允许的最大工具调用轮数（最后一轮不再给工具，强制收尾）
 
 async function loadAiChat(){
   // 进入页面：加载历史会话列表 + 模型下拉（可选模型）
@@ -828,12 +846,25 @@ function aiSetFull(on){
   const el = document.querySelector('.ai-chat'); if(!el) return;
   el.classList.toggle('ai-full', !!on);
   const b = $('#aiFullBtn'); if(b) b.textContent = on ? '退出全屏' : '全屏';
+  aiFitHeight();
 }
 function aiToggleFull(){
   const el = document.querySelector('.ai-chat'); if(!el) return;
   const on = !el.classList.contains('ai-full');
   aiSetFull(on);
   try{ localStorage.setItem('aiFull', on ? '1' : '0'); }catch(e){}
+  scrollAiBottom();
+}
+// 手机端：把聊天卡片高度精确设为「卡片顶部到屏幕底部」，确保输入框紧贴屏幕底边
+function aiFitHeight(){
+  const el = document.querySelector('.ai-chat'); if(!el) return;
+  if(window.innerWidth > 640 || el.classList.contains('ai-full')){ el.style.height = ''; return; }
+  const page = $('#page-ai');
+  if(page && page.classList.contains('hidden')) return;
+  const rect = el.getBoundingClientRect();
+  const absTop = rect.top + (window.scrollY || window.pageYOffset || 0);
+  const vh = document.documentElement.clientHeight || window.innerHeight;
+  el.style.height = Math.max(220, Math.round(vh - absTop)) + 'px';
   scrollAiBottom();
 }
 // 保存系统提示词（立即生效，改动过大可能导致 AI 不好用）
@@ -1007,21 +1038,14 @@ function renderAiMessages(){
   const box = $('#aiCol'); if(!box) return;
   if(!aiConvMessages.length){ box.innerHTML = '<div class="empty">开始和 AI 对话吧</div>'; return; }
   let html = '';
-  for(let i = 0; i < aiConvMessages.length; i++){
+  let i = 0;
+  while(i < aiConvMessages.length){
     const m = aiConvMessages[i] || {};
-    // 连续的工具结果合并为一个可折叠块（批量调用时默认收起）
-    if(m.role === 'tool'){
-      const group = [];
-      while(i < aiConvMessages.length && aiConvMessages[i] && aiConvMessages[i].role === 'tool'){ group.push(aiConvMessages[i]); i++; }
-      i--;
-      const inner = group.map(aiToolNoteHtml).join('');
-      const denied = group.some(function(g){ return g && g.denied; });
-      html += group.length > 1
-        ? '<details class="ai-tools-fold"><summary>工具结果（'+group.length+(denied?' · 含被拒绝':'')+'）</summary><div>'+inner+'</div></details>'
-        : inner;
-      continue;
-    }
-    html += aiBubbleHtml(m.role, m.content, i, m);
+    if(m.role === 'user'){ html += aiBubbleHtml('user', m.content, i, m); i++; continue; }
+    // 一轮 AI 回复：assistant 及其后的 tool 结果合并成一个气泡
+    const start = i, turn = [];
+    while(i < aiConvMessages.length && (aiConvMessages[i] || {}).role !== 'user'){ turn.push(aiConvMessages[i]); i++; }
+    html += aiTurnHtml(turn, start);
   }
   box.innerHTML = html;
   scrollAiBottom();
@@ -1039,11 +1063,8 @@ function aiRecall(i){
   const inp = $('#aiInput'); if(inp){ inp.value = text; inp.focus(); }
   aiSaveConversation();
 }
-// 复制消息原始内容（Markdown 源码 / 纯文本）
-function aiCopy(i){
-  if(i < 0 || i >= aiConvMessages.length) return;
-  const m = aiConvMessages[i] || {};
-  const text = (typeof m.content === 'string') ? m.content : '';
+// 复制文本到剪贴板（供 aiCopy / aiCopyTurn 复用）
+function aiCopyText(text){
   if(!text){ toast('没有可复制的内容', true); return; }
   const done = function(){ toast('已复制'); };
   const fallback = function(){
@@ -1057,6 +1078,70 @@ function aiCopy(i){
   if(navigator.clipboard && navigator.clipboard.writeText){
     navigator.clipboard.writeText(text).then(done).catch(fallback);
   } else fallback();
+}
+// 复制单条消息原始内容（Markdown 源码 / 纯文本）
+function aiCopy(i){
+  if(i < 0 || i >= aiConvMessages.length) return;
+  const m = aiConvMessages[i] || {};
+  aiCopyText((typeof m.content === 'string') ? m.content : '');
+}
+// 复制一整轮 AI 回复（从 startIdx 起、直到下一条用户消息前的全部正文）
+function aiCopyTurn(startIdx){
+  let text = '';
+  for(let k = startIdx; k < aiConvMessages.length; k++){
+    const m = aiConvMessages[k] || {};
+    if(m.role === 'user') break;
+    if(typeof m.content === 'string' && m.content) text += (text ? '\n\n' : '') + m.content;
+  }
+  aiCopyText(text);
+}
+// 单个工具：调用与结果合并展示（一行调用 + 紧随其后的结果）
+function aiToolMergedHtml(name, args, r){
+  const denied = !!(r && r.denied);
+  const argsStr = String(args == null ? '' : args).replace(/\s+/g, ' ').trim().slice(0, 300);
+  const resStr = r ? String(r.content == null ? '' : r.content).replace(/\s+/g, ' ').trim().slice(0, 300) : '';
+  let s = '<div class="ai-tool-call"><span class="ai-tool-tag">调用</span>' + esc(name || '');
+  if(argsStr) s += ' <span class="ai-tool-inline">' + esc(argsStr) + '</span>';
+  if(r){
+    s += '<div class="ai-tool-res' + (denied ? ' err' : '') + '"><span class="ai-tool-tag">' +
+      (denied ? '已拒绝' : '结果') + '</span>' + (resStr ? esc(resStr) : '（空）') + '</div>';
+  }
+  s += '</div>';
+  return s;
+}
+// 一整轮 AI 回复（assistant + 其后的工具结果）渲染成一个气泡：
+// 只在最上面显示一次「AI」、最下面显示一次「复制」，工具调用与结果合并
+function aiTurnHtml(turn, startIdx){
+  const resById = {};
+  turn.forEach(function(m){ if(m && m.role === 'tool' && m.tool_call_id) resById[m.tool_call_id] = m; });
+  let think = '', body = '', tools = '', hasText = false, toolCount = 0, anyDenied = false;
+  for(let k = 0; k < turn.length; k++){
+    const m = turn[k] || {};
+    if(m.role === 'tool') continue; // 已在其「调用」处合并展示
+    if(m.reasoning) think += (think ? '\n\n' : '') + m.reasoning;
+    if(m.content){ hasText = true; body += '<div class="ai-body md">' + renderMd(m.content) + '</div>'; }
+    if(m.tool_calls && m.tool_calls.length){
+      m.tool_calls.forEach(function(t){
+        const f = t.function || {};
+        const r = resById[t.id];
+        if(r && r.denied) anyDenied = true;
+        toolCount++;
+        tools += aiToolMergedHtml(f.name, f.arguments, r);
+      });
+    }
+  }
+  const thinkHtml = think
+    ? '<details class="ai-think"><summary>思考过程</summary><div class="ai-think-body">' + esc(think) + '</div></details>'
+    : '';
+  const toolsHtml = tools
+    ? (toolCount > 1
+        ? '<details class="ai-tools-fold" open><summary>调用工具 ' + toolCount + ' 次' + (anyDenied ? '（含被拒绝）' : '') + '</summary><div>' + tools + '</div></details>'
+        : tools)
+    : '';
+  const acts = hasText
+    ? '<div class="ai-acts"><button title="复制本段回复内容" onclick="aiCopyTurn(' + startIdx + ')">复制</button></div>'
+    : '';
+  return '<div class="ai-msg assistant"><div class="ai-who">AI</div>' + thinkHtml + toolsHtml + body + acts + '</div>';
 }
 function aiBubbleHtml(role, content, idx, m){
   m = m || {};
@@ -1072,27 +1157,9 @@ function aiBubbleHtml(role, content, idx, m){
     const recall = (hasIdx && isUser) ? '<button title="撤回这条及之后的消息" onclick="aiRecall('+idx+')">撤回</button>' : '';
     if(copy || recall) acts = '<div class="ai-acts">'+copy+recall+'</div>';
   }
-  // 工具调用：批量时折叠，可展开
-  let extra = '';
-  if(m.tool_calls && m.tool_calls.length){
-    const items = m.tool_calls.map(function(t){
-      const f = t.function || {};
-      return '<div class="ai-tool-call"><span class="ai-tool-tag">调用</span>'+esc(f.name)+
-        ' <span class="ai-tool-inline">'+esc(f.arguments || '')+'</span></div>';
-    }).join('');
-    extra = m.tool_calls.length > 1
-      ? '<details class="ai-tools-fold"><summary>调用 '+m.tool_calls.length+' 个工具</summary><div>'+items+'</div></details>'
-      : items;
-  }
-  // 思考过程（思考模式下保留）：可展开 / 收起
-  const think = (!isUser && m.reasoning)
-    ? '<details class="ai-think"><summary>思考过程</summary><div class="ai-think-body">'+esc(m.reasoning)+'</div></details>'
-    : '';
   return '<div class="ai-msg '+(isUser?'user':'assistant')+'">'+
     '<div class="ai-who">'+(isUser?'我':'AI')+'</div>'+
-    think +
     (hasText ? '<div class="ai-body'+(isUser?'':' md')+'">'+(isUser?esc(content):renderMd(content))+'</div>' : '')+
-    extra +
     acts +
   '</div>';
 }
@@ -1132,10 +1199,12 @@ async function aiAgentLoop(){
   const stopBtn = $('#aiStopBtn'); if(stopBtn) stopBtn.style.display = '';
   const msg = $('#aiChatMsg'); if(msg){ msg.className = 'msg'; msg.textContent = ''; }
   aiAbort = new AbortController();
-  let rounds = 0, stopped = false, failed = false;
+  let rounds = 0;
   try{
-    while(rounds < 8){
+    while(rounds < AI_MAX_ROUNDS){
       rounds++;
+      // 最后一轮不再提供工具，强制模型用文字给出收尾答复，避免「执行到一半被截断」
+      const lastRound = rounds >= AI_MAX_ROUNDS;
       renderAiMessages();
       const box = $('#aiCol');
       if(box) box.insertAdjacentHTML('beforeend', '<div class="ai-msg assistant"><div class="ai-who">AI</div>'+
@@ -1146,17 +1215,16 @@ async function aiAgentLoop(){
       const thinkEl = box ? box.querySelector('#aiCurThink') : null;
       let res;
       try{
-        res = await aiStreamRound(modelName, { bodyEl: bodyEl, thinkEl: thinkEl });
+        res = await aiStreamRound(modelName, { bodyEl: bodyEl, thinkEl: thinkEl }, lastRound);
       }catch(e){
-        if(e && e.name === 'AbortError'){ stopped = true; if(msg){ msg.className = 'msg'; msg.textContent = '已停止生成'; } break; }
-        failed = true;
+        if(e && e.name === 'AbortError'){ if(msg){ msg.className = 'msg'; msg.textContent = '已停止生成'; } break; }
         const err = (e && e.message) ? e.message : String(e);
         const hint = aiChatProxyOn() ? '（前端代理请求失败：服务商可能不允许跨域）' : '';
         if(msg){ msg.className = 'msg err'; msg.textContent = '请求失败：' + err + hint; }
         toast('请求失败：' + err, true);
         break;
       }
-      if(res.toolCalls && res.toolCalls.length){
+      if(res.toolCalls && res.toolCalls.length && !lastRound){
         const am = {
           role:'assistant',
           content: res.content || '',
@@ -1192,13 +1260,12 @@ async function aiAgentLoop(){
         renderAiMessages();
         continue;
       }
-      const fm = { role:'assistant', content: res.content || '' };
+      const fm = { role:'assistant', content: res.content || (lastRound ? '（工具调用次数已达本轮上限，请回复「继续」以接着处理）' : '') };
       if(aiThink && res.reasoning) fm.reasoning = res.reasoning;
       aiConvMessages.push(fm);
       renderAiMessages();
       break;
     }
-    if(rounds >= 8 && !failed && !stopped) toast('已达到工具调用上限，可继续输入以推进', true);
   }finally{
     aiStreaming = false; aiAbort = null;
     if(sendBtn) sendBtn.disabled = false;
@@ -1215,17 +1282,18 @@ function aiCleanMsg(m){
   return c;
 }
 // 流式请求一轮，返回 {content, toolCalls, reasoning}
-async function aiStreamRound(modelName, ui){
+async function aiStreamRound(modelName, ui, noTools){
   // 系统提示词（AI 提示词）+ 工具使用说明：仅在请求时附加，不写入历史
   const sysParts = [];
   if(aiPrompt) sysParts.push(aiPrompt);
-  if(aiToolsHint) sysParts.push(aiToolsHint);
+  if(aiToolsHint && !noTools) sysParts.push(aiToolsHint);
   const hist = aiConvMessages.map(aiCleanMsg);
   const reqMessages = sysParts.length ? [{ role:'system', content: sysParts.join('\\n\\n') }].concat(hist) : hist;
   const payload = { messages: reqMessages, model: modelName };
   // 思考强度：作为 reasoning_effort 一并发给服务商（关闭时不发送）
   if(aiThink) payload.reasoning_effort = aiThinkLevel;
-  if(aiTools && aiTools.length){ payload.tools = aiTools; payload.tool_choice = 'auto'; }
+  // 收尾轮不带工具，让模型直接输出文字总结
+  if(aiTools && aiTools.length && !noTools){ payload.tools = aiTools; payload.tool_choice = 'auto'; }
   let resp;
   if(aiChatProxyOn()){
     // 前端代理：浏览器直连服务商（仅当服务商允许跨域 CORS 时可用）
@@ -2229,6 +2297,12 @@ document.addEventListener('DOMContentLoaded', ()=>{
     aiInputEl.addEventListener('input', aiAutoGrow);
     aiAutoGrow();
   }
+  // 手机端：尺寸变化 / 旋转 / 软键盘弹出时重新计算聊天区高度，保证输入框始终贴屏幕底边
+  const aiFitSoon = ()=>{ if(window.innerWidth<=640) aiFitHeight(); };
+  window.addEventListener('resize', aiFitSoon);
+  window.addEventListener('orientationchange', ()=>setTimeout(aiFitSoon,120));
+  if(window.visualViewport) window.visualViewport.addEventListener('resize', aiFitSoon);
+  if(window.__INITIAL__==='ai') setTimeout(aiFitSoon, 350);
   // 新建文章：重置表单后 SPA 进入写作页（不刷新）
   $('#newBtn').onclick=()=>{
     editingPath='';
@@ -2570,16 +2644,16 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
         <div class="msg" id="aiChatMsg" style="margin:0 14px"></div>
         <div class="ai-foot">
           <span class="wk-label" style="margin:0">模型</span>
-          <select class="wk-input" id="aiChatModel" style="width:auto;flex:1 1 200px;min-width:120px;max-width:320px;padding:4px 8px"></select>
+          <select class="wk-input" id="aiChatModel" style="width:auto;flex:1 1 140px;min-width:80px;max-width:320px;padding:4px 8px"></select>
           <span class="wk-label" style="margin:0">权限</span>
-          <select class="wk-input" id="aiChatPermission" onchange="aiSetPermission(this.value)" style="width:auto;flex:1 1 200px;min-width:150px;max-width:320px;padding:4px 8px">
-            <option value="safe">安全访问 · 仅对话</option>
-            <option value="important">重要确认 · 危险操作确认</option>
-            <option value="all">全部确认 · 每步都确认</option>
-            <option value="full">完全访问 · 无需确认</option>
+          <select class="wk-input" id="aiChatPermission" onchange="aiSetPermission(this.value)" title="权限：安全=仅对话；重要=危险操作确认；全部=每步确认；完全=无需确认" style="width:auto;flex:0 0 auto;min-width:0;padding:4px 8px">
+            <option value="safe" title="安全访问 · 仅对话">安全</option>
+            <option value="important" title="重要确认 · 危险操作确认">重要</option>
+            <option value="all" title="全部确认 · 每步都确认">全部</option>
+            <option value="full" title="完全访问 · 无需确认">完全</option>
           </select>
           <span class="wk-label" style="margin:0">思考强度</span>
-          <select class="wk-input" id="aiChatThink" onchange="aiSetThink(this.value)" title="思考强度会作为 reasoning_effort 发给服务商；需所选模型支持推理（如 deepseek-reasoner），不支持时会报错" style="width:auto;flex:0 0 auto;min-width:100px;padding:4px 8px">
+          <select class="wk-input" id="aiChatThink" onchange="aiSetThink(this.value)" title="思考强度会作为 reasoning_effort 发给服务商；需所选模型支持推理（如 deepseek-reasoner），不支持时会报错" style="width:auto;flex:0 0 auto;min-width:0;padding:4px 8px">
             <option value="off">关闭</option>
             <option value="low">低</option>
             <option value="medium">中</option>
