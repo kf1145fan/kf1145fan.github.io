@@ -41,7 +41,7 @@ jobs:
       - name: Deploy to gh-pages
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
-          REPO: "kf1145fan/kf1145fan.github.io"
+          REPO: ${{ github.repository }}
         run: |
           cd public || exit 1
           git init -q
@@ -59,8 +59,10 @@ jobs:
           NOTIFY_SECRET: ${{ secrets.GH_TOKEN }}
           POST_TITLE: ${{ inputs.post_title }}
           POST_URL: ${{ inputs.post_url }}
+          # 通知回调地址：默认上游域名；换成自己的可在仓库 Variables 里设 SITE_URL
+          NOTIFY_URL: ${{ vars.SITE_URL || 'https://blog.902786.xyz' }}
         run: |
-          curl -sS -m 60 -X POST "https://blog.902786.xyz/api/internal/notify-published" \
+          curl -sS -m 60 -X POST "${NOTIFY_URL}/api/internal/notify-published" \
             -H "Content-Type: application/json" \
             -H "x-notify-secret: ${NOTIFY_SECRET}" \
             -d "$(jq -n --arg t "$POST_TITLE" --arg u "$POST_URL" '{title:$t,url:$u}')"

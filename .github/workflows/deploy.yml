@@ -31,7 +31,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
         run: |
-          REPO="kf1145fan/kf1145fan.github.io"
+          REPO="${{ github.repository }}"
           gh api -X POST repos/${REPO}/pages \
             -f "source[branch]=gh-pages" -f "source[path]=/" 2>/dev/null \
             || gh api -X PUT repos/${REPO}/pages \
@@ -41,7 +41,7 @@ jobs:
       - name: Deploy to gh-pages
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
-          REPO: "kf1145fan/kf1145fan.github.io"
+          REPO: ${{ github.repository }}
         run: |
           cd public || exit 1
           git init -q
