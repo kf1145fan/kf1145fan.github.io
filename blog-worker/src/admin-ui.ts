@@ -219,9 +219,6 @@ a{color:var(--accent);text-decoration:none}
 .ai-tools-fold>div{padding:0 10px 8px;max-height:320px;overflow:auto}
 /* 折叠状态也能看到最新一次工具调用（不含返回结果） */
 .ai-tools-fold>summary .ai-tools-last{opacity:.8}
-/* 用量：已使用 / 缓存命中 */
-.ai-usage{display:flex;gap:12px;flex-wrap:wrap;font-size:11px;color:var(--muted);margin-top:2px}
-.ai-usage b{font-weight:600;color:var(--fg)}
 /* 输入区上方一行的「i」按钮：查看已用 token / 缓存命中 */
 #aiUsageBtn{margin-left:auto;flex:0 0 auto;width:26px;height:26px;padding:0;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;line-height:1}
 .ai-usage-pop{position:fixed;z-index:1200;background:var(--card);border:1px solid var(--border);border-radius:4px;box-shadow:0 6px 24px rgba(0,0,0,.18);padding:10px 12px;min-width:190px;font-size:12px}
@@ -571,7 +568,6 @@ async function loadAiSettings(){
     if(r.ok && r.data){
       const d = r.data;
       const bu = $('#aiBaseUrl'); if(bu) bu.value = d.baseUrl || '';
-      const md = $('#aiModel'); if(md) md.value = d.model || '';
       const en = $('#aiEnabled'); if(en) en.checked = !!d.enabled;
       const cp = $('#aiClientProxy'); if(cp) cp.checked = !!d.clientProxy;
       const pm = $('#aiPermission'); if(pm) pm.value = d.permission || 'safe';
@@ -586,17 +582,11 @@ async function loadAiSettings(){
 async function saveAiSettings(){
   const en = $('#aiEnabled');
   const picked = aiPicked.slice();
-  let md = aiVal('aiModel').trim();
-  // 未手填默认模型时，取第一个已选模型；默认模型同时纳入可选列表，保证助手里能切换
-  if(!md && picked.length) md = picked[0];
-  if(md && picked.indexOf(md) < 0) picked.push(md);
-  const mdEl = $('#aiModel'); if(mdEl) mdEl.value = md;
-  aiPicked = picked;
-  renderAiModels();
+  // 不再有独立的「默认模型」：以勾选的第一个模型作为助手默认，其余可在助手里切换
   const payload = {
     baseUrl: aiVal('aiBaseUrl').trim(),
     apiKey: aiVal('aiApiKey'),
-    model: md,
+    model: picked[0] || '',
     models: picked,
     prompt: aiVal('aiPrompt'),
     enabled: !!(en && en.checked),
@@ -616,51 +606,61 @@ async function saveAiSettings(){
     if(msg){ msg.className='msg err'; msg.textContent=err; }
   }
 }
+// 测试连通性：对「已勾选」的每个模型各发一个最小请求，逐个给出结果
 async function testAiSettings(){
   const msg = $('#aiMsg');
+  const models = aiPicked.slice();
+  if(!models.length){
+    if(msg){ msg.className='msg err'; msg.textContent='请先在下方勾选要测试的模型'; }
+    toast('请先勾选要测试的模型', true);
+    return;
+  }
   if(msg){ msg.className='msg'; msg.textContent='测试中...'; }
   toast('测试中...');
   const base = aiVal('aiBaseUrl').trim();
   const key = aiVal('aiApiKey');
-  const model = aiVal('aiModel').trim();
-  try{
-    let elapsed = null, reply = '', useModel = model, err = '';
-    if(aiProxyOn()){
-      // 前端代理：浏览器直连服务商（绕过 Cloudflare 出网限制）
-      const k = await resolveAiKey(key);
-      const t0 = Date.now();
-      const resp = await fetch(aiJoin(base, '/chat/completions'), {
-        method:'POST',
-        headers: Object.assign({'Content-Type':'application/json'}, k ? {Authorization:'Bearer ' + k} : {}),
-        body: JSON.stringify({ model: model, messages:[{role:'user', content:'你好，这是一条连通性测试消息，请回复一句话确认。'}], max_tokens:32 })
-      });
-      elapsed = Date.now() - t0;
-      const d = await resp.json().catch(()=>({}));
-      if(resp.ok){
-        useModel = d.model || model;
-        reply = (d.choices && d.choices[0] && d.choices[0].message && d.choices[0].message.content) || '';
+  const out = [];
+  for(let n = 0; n < models.length; n++){
+    const model = models[n];
+    try{
+      let elapsed = null, reply = '', err = '';
+      if(aiProxyOn()){
+        // 前端代理：浏览器直连服务商（绕过 Cloudflare 出网限制）
+        const k = await resolveAiKey(key);
+        const t0 = Date.now();
+        const resp = await fetch(aiJoin(base, '/chat/completions'), {
+          method:'POST',
+          headers: Object.assign({'Content-Type':'application/json'}, k ? {Authorization:'Bearer ' + k} : {}),
+          body: JSON.stringify({ model: model, messages:[{role:'user', content:'你好，这是一条连通性测试消息，请回复一句话确认。'}], max_tokens:32 })
+        });
+        elapsed = Date.now() - t0;
+        const d = await resp.json().catch(()=>({}));
+        if(resp.ok){
+          reply = (d.choices && d.choices[0] && d.choices[0].message && d.choices[0].message.content) || '';
+        } else {
+          err = (d.error && (d.error.message || d.error)) || ('HTTP ' + resp.status);
+        }
       } else {
-        err = (d.error && (d.error.message || d.error)) || ('HTTP ' + resp.status);
+        const r = await api('/admin/api/ai/test', { method:'POST', body: JSON.stringify({ baseUrl: base, apiKey: key, model: model }) });
+        const d = (r.data || {});
+        if(r.ok && d.ok){ elapsed = d.elapsed; reply = d.reply || ''; }
+        else err = d.error || '测试失败';
       }
-    } else {
-      const r = await api('/admin/api/ai/test', { method:'POST', body: JSON.stringify({ baseUrl: base, apiKey: key, model: model }) });
-      const d = (r.data || {});
-      if(r.ok && d.ok){ elapsed = d.elapsed; useModel = d.model || model; reply = d.reply || ''; }
-      else err = d.error || '测试失败';
+      out.push(err
+        ? { ok:false, text:'✗ ' + model + '：' + err }
+        : { ok:true, text:'✓ ' + model + '：连接成功（' + (elapsed == null ? '-' : elapsed) + 'ms）' + (reply ? ' · ' + reply : '') });
+    }catch(e){
+      const hint = aiProxyOn() ? '（前端代理直连失败，可能是服务商未开放跨域/CORS）' : '';
+      out.push({ ok:false, text:'✗ ' + model + '：' + ((e && e.message) ? e.message : e) + hint });
     }
-    if(!err){
-      const text = '连接成功，耗时 ' + (elapsed == null ? '-' : elapsed) + 'ms；模型「' + useModel + '」回复：' + (reply || '（空）');
-      toast('连接成功（' + (elapsed == null ? '-' : elapsed) + 'ms）');
-      if(msg){ msg.className='msg ok'; msg.textContent=text; }
-    } else {
-      toast('测试失败：' + err, true);
-      if(msg){ msg.className='msg err'; msg.textContent='测试失败：' + err; }
-    }
-  }catch(e){
-    const hint = aiProxyOn() ? '（前端代理直连失败，可能是服务商未开放跨域/CORS，请改用后端或检查网络）' : '';
-    toast('测试失败', true);
-    if(msg){ msg.className='msg err'; msg.textContent='测试失败：' + ((e && e.message) ? e.message : e) + hint; }
   }
+  const okCount = out.filter(function(x){ return x.ok; }).length;
+  const allOk = okCount === out.length;
+  if(msg){
+    msg.className = allOk ? 'msg ok' : 'msg err';
+    msg.innerHTML = out.map(function(x){ return esc(x.text); }).join('<br>');
+  }
+  toast(allOk ? ('全部连通 ' + okCount + '/' + out.length) : ('连通 ' + okCount + '/' + out.length), !allOk);
 }
 async function loadAiModels(){
   const box = $('#aiModelList');
@@ -718,27 +718,16 @@ function renderAiModels(){
   const q = (qEl && qEl.value ? qEl.value : '').trim().toLowerCase();
   const list = q ? aiModels.filter(m => String(m).toLowerCase().indexOf(q) >= 0) : aiModels;
   if(!list.length){ box.innerHTML = '<span class="wk-label" style="margin:0">没有匹配「' + esc(q) + '」的模型</span>'; return; }
-  const cur = aiVal('aiModel').trim();
   box.innerHTML = list.map(m => {
     const on = aiPicked.indexOf(m) >= 0;
-    const star = (cur === m) ? ' <span class="wk-label" style="margin:0">默认</span>' : '';
     return '<label class="ai-pick' + (on ? ' on' : '') + '">' +
       '<input type="checkbox"' + (on ? ' checked' : '') + ' onchange="toggleAiModel(&#39;' + esc(m) + '&#39;)">' +
-      '<span class="ai-pick-n">' + esc(m) + '</span>' + star + '</label>';
+      '<span class="ai-pick-n">' + esc(m) + '</span></label>';
   }).join('');
 }
 function toggleAiModel(m){
   const i = aiPicked.indexOf(m);
-  const md = $('#aiModel');
-  if(i >= 0){
-    aiPicked.splice(i, 1);
-    // 取消的正好是默认模型时，顺延到其它已选模型
-    if(md && md.value.trim() === m) md.value = aiPicked[0] || '';
-  } else {
-    aiPicked.push(m);
-    // 选中即填入默认模型，无需再手动输入
-    if(md) md.value = m;
-  }
+  if(i >= 0) aiPicked.splice(i, 1); else aiPicked.push(m);
   renderAiModels();
 }
 function aiPickVisible(){
@@ -747,15 +736,11 @@ function aiPickVisible(){
   return q ? aiModels.filter(m => String(m).toLowerCase().indexOf(q) >= 0) : aiModels.slice();
 }
 function aiPickAll(){
-  const vis = aiPickVisible();
-  vis.forEach(m => { if(aiPicked.indexOf(m) < 0) aiPicked.push(m); });
-  const md = $('#aiModel');
-  if(md && !md.value.trim() && vis.length) md.value = vis[0];
+  aiPickVisible().forEach(m => { if(aiPicked.indexOf(m) < 0) aiPicked.push(m); });
   renderAiModels();
 }
 function aiPickNone(){
   aiPicked = [];
-  const md = $('#aiModel'); if(md) md.value = '';
   renderAiModels();
 }
 
@@ -765,6 +750,7 @@ let aiPendingConv = null;     // 从 URL（/admin/ai/<id>）解析出的待打�
 let aiConvMessages = [];      // [{role, content}]
 let aiStreaming = false;      // 是否正在流式接收
 let aiAbort = null;           // 中止控制器
+let aiUsagePending = null;    // 进行中一轮的 usage（尚未写入消息，供「i」面板实时展示）
 let aiChatProxy = false;      // 前端代理（取自设置中已保存的配置）
 let aiPrompt = '';            // AI 提示词（系统提示）
 let aiPromptDefault = '';     // 内置默认系统提示词（「还原默认」用）
@@ -940,8 +926,9 @@ function aiSyncUrl(){
 }
 function aiNewChat(){
   if(aiStreaming){ toast('正在回复中，请稍候', true); return; }
-  aiConvId = null; aiConvMessages = []; aiConvTitle = '';
+  aiConvId = null; aiConvMessages = []; aiConvTitle = ''; aiUsagePending = null;
   aiSetTitle('');
+  aiUpdateUsagePop();
   renderAiMessages();
   loadAiConversations();
   aiSyncUrl();
@@ -973,8 +960,9 @@ async function aiOpenConv(id){
   const c = r.data.conversation;
   aiConvId = c.id;
   aiConvMessages = Array.isArray(c.messages) ? c.messages : [];
-  aiConvTitle = c.title || '';
+  aiConvTitle = c.title || ''; aiUsagePending = null;
   aiSetTitle(aiConvTitle);
+  aiUpdateUsagePop();
   renderAiMessages();
   aiSyncUrl();
   loadAiConversations();
@@ -1182,19 +1170,37 @@ function aiAccUsage(acc, u){
   acc.cached += ((u.prompt_tokens_details && +u.prompt_tokens_details.cached_tokens) || (+u.prompt_cache_hit_tokens) || 0);
 }
 function aiFmtNum(n){ n = +n || 0; return String(n).replace(/\\B(?=(\\d{3})+(?!\\d))/g, ','); }
-// 用量行：已使用 token、缓存命中（无数据时不显示）
-function aiUsageHtml(u){
-  if(!u || !u.has) return '';
-  let s = '<div class="ai-usage"><span>已使用 <b>' + aiFmtNum(u.total) + '</b> tokens</span>';
-  if(u.cached > 0) s += '<span>缓存命中 <b>' + aiFmtNum(u.cached) + '</b> tokens</span>';
-  s += '</div>';
-  return s;
-}
-// 整段对话累计用量（用于「i」按钮弹层）
+// 整段对话累计用量（用于「i」按钮弹层）：已落库消息 + 进行中一轮的实时用量
 function aiConvUsage(){
   const u = { has:false, total:0, cached:0, prompt:0, completion:0 };
   aiConvMessages.forEach(function(m){ if(m && m.usage) aiAccUsage(u, m.usage); });
+  if(aiUsagePending) aiAccUsage(u, aiUsagePending);
   return u;
+}
+function aiUsagePopHtml(u){
+  if(!u.has){
+    return '<div class="ai-usage-pop-h">Token 用量</div><div class="ai-usage-empty">当前对话暂无用量的数据（服务商未返回 usage）</div>';
+  }
+  return '<div class="ai-usage-pop-h">Token 用量</div>'+
+    '<div class="ai-usage-row"><span>已使用</span><b>' + aiFmtNum(u.total) + ' tokens</b></div>'+
+    '<div class="ai-usage-row"><span>输入</span><span>' + aiFmtNum(u.prompt) + '</span></div>'+
+    '<div class="ai-usage-row"><span>输出</span><span>' + aiFmtNum(u.completion) + '</span></div>'+
+    '<div class="ai-usage-row"><span>缓存命中</span><b>' + aiFmtNum(u.cached) + ' tokens</b></div>';
+}
+// 弹层常开时，实时刷新其中的用量数字
+function aiUpdateUsagePop(){
+  const pop = document.getElementById('aiUsagePop');
+  if(!pop) return;
+  pop.innerHTML = aiUsagePopHtml(aiConvUsage());
+  aiPositionUsagePop();
+}
+function aiPositionUsagePop(){
+  const pop = document.getElementById('aiUsagePop');
+  const btn = document.getElementById('aiUsageBtn');
+  if(!pop || !btn) return;
+  const r = btn.getBoundingClientRect();
+  pop.style.left = Math.max(8, Math.min(r.right - pop.offsetWidth, window.innerWidth - pop.offsetWidth - 8)) + 'px';
+  pop.style.top = Math.max(8, r.top - pop.offsetHeight - 8) + 'px';
 }
 function aiCloseUsage(){
   const p = document.getElementById('aiUsagePop');
@@ -1207,45 +1213,27 @@ function aiToggleUsage(ev){
   const existed = !!document.getElementById('aiUsagePop');
   aiCloseUsage();
   if(existed) return;
-  const btn = document.getElementById('aiUsageBtn');
-  const u = aiConvUsage();
   const pop = document.createElement('div');
   pop.id = 'aiUsagePop';
   pop.className = 'ai-usage-pop';
+  pop.innerHTML = aiUsagePopHtml(aiConvUsage());
   pop.addEventListener('click', function(e){ e.stopPropagation(); });
-  if(!u.has){
-    pop.innerHTML = '<div class="ai-usage-pop-h">Token 用量</div><div class="ai-usage-empty">当前对话暂无用量的数据（服务商未返回 usage）</div>';
-  } else {
-    pop.innerHTML = '<div class="ai-usage-pop-h">Token 用量</div>'+
-      '<div class="ai-usage-row"><span>已使用</span><b>' + aiFmtNum(u.total) + ' tokens</b></div>'+
-      '<div class="ai-usage-row"><span>输入</span><span>' + aiFmtNum(u.prompt) + '</span></div>'+
-      '<div class="ai-usage-row"><span>输出</span><span>' + aiFmtNum(u.completion) + '</span></div>'+
-      '<div class="ai-usage-row"><span>缓存命中</span><b>' + aiFmtNum(u.cached) + ' tokens</b></div>';
-  }
   document.body.appendChild(pop);
-  if(btn){
-    const r = btn.getBoundingClientRect();
-    const left = Math.max(8, Math.min(r.right - pop.offsetWidth, window.innerWidth - pop.offsetWidth - 8));
-    const top = Math.max(8, r.top - pop.offsetHeight - 8);
-    pop.style.left = left + 'px';
-    pop.style.top = top + 'px';
-  }
+  aiPositionUsagePop();
   setTimeout(function(){ document.addEventListener('click', aiCloseUsage); }, 0);
 }
 // 一整轮 AI 回复（assistant + 其后的工具结果）渲染成一个气泡：
-// 顺序为 思考 → 正文 → 工具调用（在 AI 说的话下面）→ 操作 → 用量。
+// 顺序为 思考 → 正文 → 工具调用（在 AI 说的话下面）→ 操作。
 // 生成过程中不显示「AI」标签与「复制」按钮，避免运行时的重复标记。
 function aiTurnHtml(turn, startIdx){
   const resById = {};
   turn.forEach(function(m){ if(m && m.role === 'tool' && m.tool_call_id) resById[m.tool_call_id] = m; });
   let think = '', body = '', tools = '', hasText = false, toolCount = 0, anyDenied = false, lastCall = '';
-  const usage = { has:false, total:0, cached:0, prompt:0, completion:0 };
   for(let k = 0; k < turn.length; k++){
     const m = turn[k] || {};
     if(m.role === 'tool') continue; // 已在其「调用」处合并展示
     if(m.reasoning) think += (think ? '\\n\\n' : '') + m.reasoning;
     if(m.content){ hasText = true; body += '<div class="ai-body md">' + renderMd(m.content) + '</div>'; }
-    if(m.usage) aiAccUsage(usage, m.usage);
     if(m.tool_calls && m.tool_calls.length){
       m.tool_calls.forEach(function(t){
         const f = t.function || {};
@@ -1272,7 +1260,7 @@ function aiTurnHtml(turn, startIdx){
     ? '<div class="ai-acts"><button title="复制本段回复内容" onclick="aiCopyTurn(' + startIdx + ')">复制</button></div>'
     : '';
   const whoHtml = aiStreaming ? '' : '<div class="ai-who">AI</div>';
-  return '<div class="ai-msg assistant">' + whoHtml + thinkHtml + body + toolsHtml + acts + aiUsageHtml(usage) + '</div>';
+  return '<div class="ai-msg assistant">' + whoHtml + thinkHtml + body + toolsHtml + acts + '</div>';
 }
 function aiBubbleHtml(role, content, idx, m){
   m = m || {};
@@ -1378,7 +1366,9 @@ async function aiAgentLoop(){
         if(aiThink && res.reasoning) am.reasoning = res.reasoning;
         if(res.usage) am.usage = res.usage;
         aiConvMessages.push(am);
+        aiUsagePending = null; // 已并入消息，避免重复累计
         renderAiMessages();
+        aiUpdateUsagePop();
         for(let k=0; k<res.toolCalls.length; k++){
           const t = res.toolCalls[k];
           let args = {};
@@ -1410,12 +1400,14 @@ async function aiAgentLoop(){
       if(aiThink && res.reasoning) fm.reasoning = res.reasoning;
       if(res.usage) fm.usage = res.usage;
       aiConvMessages.push(fm);
+      aiUsagePending = null;
       finished = true;
       break;
     }
   }finally{
-    aiStreaming = false; aiAbort = null;
+    aiStreaming = false; aiAbort = null; aiUsagePending = null;
     aiSetSendState(false);
+    aiUpdateUsagePop();
     // 生成结束（非中断/异常）后重渲染一次：恢复「AI」标签与「复制」按钮
     if(finished) renderAiMessages();
   }
@@ -1489,8 +1481,9 @@ async function aiStreamRound(modelName, ui, noTools){
       if(pl === '[DONE]'){ buf = ''; break; }
       let j;
       try{ j = JSON.parse(pl); }catch(e){ continue; }
-      // usage 可能在末尾单独一帧（choices 为空）返回，需在取 delta 之前解析
-      if(j.usage) usageAcc = j.usage;
+      // usage 可能在末尾单独一帧（choices 为空）返回，需在取 delta 之前解析；
+      // 同步给全局并刷新「i」面板，做到实时更新
+      if(j.usage){ usageAcc = j.usage; aiUsagePending = j.usage; aiUpdateUsagePop(); }
       const delta = j.choices && j.choices[0] && j.choices[0].delta;
       if(!delta) continue;
       // 思考模式：保留模型返回的推理内容（reasoning_content / reasoning）
@@ -2935,8 +2928,6 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
         <input class="wk-input" id="aiBaseUrl" placeholder="https://api.openai.com/v1">
         <label class="wk-label" style="margin-top:12px">API 密钥</label>
         <input class="wk-input" id="aiApiKey" type="password" placeholder="留空表示不修改">
-        <label class="wk-label" style="margin-top:12px">默认模型（在下方勾选可选模型会自动填入，也可手动输入）</label>
-        <input class="wk-input" id="aiModel" placeholder="gpt-3.5-turbo">
         <label class="wk-label" style="display:flex;align-items:center;gap:6px;margin-top:10px;cursor:pointer">
           <input type="checkbox" id="aiEnabled" style="width:auto"> 启用 AI 设置
         </label>
@@ -2957,7 +2948,7 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
         </div>
         <div class="msg" id="aiMsg"></div>
         <details class="wk-collapse" style="margin-top:12px;background:transparent;border:1px solid var(--border)">
-          <summary>可选模型（可多选，AI 助手中可切换）</summary>
+          <summary>可选模型（勾选后用于测试连通性，AI 助手中可切换）</summary>
           <div class="wk-collapse-body" style="border-top:1px solid var(--border)">
             <input class="wk-input" id="aiModelSearch" placeholder="搜索模型，如 free / gpt / claude" oninput="renderAiModels()">
             <div class="filters" style="margin:8px 0 0">
