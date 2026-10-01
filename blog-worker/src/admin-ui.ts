@@ -222,6 +222,13 @@ a{color:var(--accent);text-decoration:none}
 /* 用量：已使用 / 缓存命中 */
 .ai-usage{display:flex;gap:12px;flex-wrap:wrap;font-size:11px;color:var(--muted);margin-top:2px}
 .ai-usage b{font-weight:600;color:var(--fg)}
+/* 输入区上方一行的「i」按钮：查看已用 token / 缓存命中 */
+#aiUsageBtn{margin-left:auto;flex:0 0 auto;width:26px;height:26px;padding:0;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;line-height:1}
+.ai-usage-pop{position:fixed;z-index:1200;background:var(--card);border:1px solid var(--border);border-radius:4px;box-shadow:0 6px 24px rgba(0,0,0,.18);padding:10px 12px;min-width:190px;font-size:12px}
+.ai-usage-pop-h{font-size:12px;font-weight:600;margin-bottom:8px}
+.ai-usage-row{display:flex;justify-content:space-between;gap:18px;padding:3px 0;color:var(--muted)}
+.ai-usage-row b{color:var(--fg);font-weight:600}
+.ai-usage-empty{color:var(--muted);max-width:210px;line-height:1.6}
 .ai-input{display:flex;gap:8px;align-items:flex-end;padding:8px 14px 12px;flex-shrink:0}
 /* 输入框不显示拖拽手柄：随内容自动向上增高（到上限后内部滚动） */
 .ai-input textarea{flex:1;resize:none;min-height:34px;max-height:220px;overflow-y:hidden;border-radius:2px}
@@ -1183,6 +1190,48 @@ function aiUsageHtml(u){
   s += '</div>';
   return s;
 }
+// 整段对话累计用量（用于「i」按钮弹层）
+function aiConvUsage(){
+  const u = { has:false, total:0, cached:0, prompt:0, completion:0 };
+  aiConvMessages.forEach(function(m){ if(m && m.usage) aiAccUsage(u, m.usage); });
+  return u;
+}
+function aiCloseUsage(){
+  const p = document.getElementById('aiUsagePop');
+  if(p) p.remove();
+  document.removeEventListener('click', aiCloseUsage);
+}
+// 「i」按钮：点击在按钮上方弹出用量详情
+function aiToggleUsage(ev){
+  if(ev) ev.stopPropagation();
+  const existed = !!document.getElementById('aiUsagePop');
+  aiCloseUsage();
+  if(existed) return;
+  const btn = document.getElementById('aiUsageBtn');
+  const u = aiConvUsage();
+  const pop = document.createElement('div');
+  pop.id = 'aiUsagePop';
+  pop.className = 'ai-usage-pop';
+  pop.addEventListener('click', function(e){ e.stopPropagation(); });
+  if(!u.has){
+    pop.innerHTML = '<div class="ai-usage-pop-h">Token 用量</div><div class="ai-usage-empty">当前对话暂无用量的数据（服务商未返回 usage）</div>';
+  } else {
+    pop.innerHTML = '<div class="ai-usage-pop-h">Token 用量</div>'+
+      '<div class="ai-usage-row"><span>已使用</span><b>' + aiFmtNum(u.total) + ' tokens</b></div>'+
+      '<div class="ai-usage-row"><span>输入</span><span>' + aiFmtNum(u.prompt) + '</span></div>'+
+      '<div class="ai-usage-row"><span>输出</span><span>' + aiFmtNum(u.completion) + '</span></div>'+
+      '<div class="ai-usage-row"><span>缓存命中</span><b>' + aiFmtNum(u.cached) + ' tokens</b></div>';
+  }
+  document.body.appendChild(pop);
+  if(btn){
+    const r = btn.getBoundingClientRect();
+    const left = Math.max(8, Math.min(r.right - pop.offsetWidth, window.innerWidth - pop.offsetWidth - 8));
+    const top = Math.max(8, r.top - pop.offsetHeight - 8);
+    pop.style.left = left + 'px';
+    pop.style.top = top + 'px';
+  }
+  setTimeout(function(){ document.addEventListener('click', aiCloseUsage); }, 0);
+}
 // 一整轮 AI 回复（assistant + 其后的工具结果）渲染成一个气泡：
 // 顺序为 思考 → 正文 → 工具调用（在 AI 说的话下面）→ 操作 → 用量。
 // 生成过程中不显示「AI」标签与「复制」按钮，避免运行时的重复标记。
@@ -1216,7 +1265,7 @@ function aiTurnHtml(turn, startIdx){
   const toolsHtml = tools
     ? (toolCount > 1
         ? '<details class="ai-tools-fold" data-k="tools-' + startIdx + '"><summary>调用工具 ' + toolCount + ' 次' + (anyDenied ? '（含被拒绝）' : '') +
-            (lastCall ? ' · <span class="ai-tools-last">最新：' + esc(lastCall) + '</span>' : '') + '</summary><div>' + tools + '</div></details>'
+            (lastCall ? ' · <span class="ai-tools-last">' + esc(lastCall) + '</span>' : '') + '</summary><div>' + tools + '</div></details>'
         : tools)
     : '';
   const acts = (!aiStreaming && hasText)
@@ -2762,6 +2811,9 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
             <option value="medium">中</option>
             <option value="high">高</option>
           </select>
+          <button class="wk-btn ghost sm ai-icon-btn" id="aiUsageBtn" onclick="aiToggleUsage(event)" title="查看已用 token / 缓存命中" aria-label="查看 token 用量">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+          </button>
         </div>
         <div class="ai-input">
           <textarea class="wk-input" id="aiInput" rows="3" placeholder="输入文字"></textarea>
