@@ -35,6 +35,24 @@ jobs:
       - name: Install Hexo deps
         run: npm install
 
+      # 站点地址：优先用仓库 Variables 的 SITE_URL；否则按仓库推导 GitHub Pages 地址
+      - name: Set site URL in _config.yml
+        env:
+          SITE_URL_VAR: ${{ vars.SITE_URL }}
+        run: |
+          OWNER="${{ github.repository_owner }}"
+          NAME="${{ github.repository }}"; NAME="${NAME##*/}"
+          if [ -n "$SITE_URL_VAR" ]; then
+            URL="${SITE_URL_VAR%/}"; ROOT="/"
+          elif [ "$(echo "$NAME" | tr 'A-Z' 'a-z')" = "$(echo "$OWNER" | tr 'A-Z' 'a-z').github.io" ]; then
+            URL="https://$OWNER.github.io"; ROOT="/"
+          else
+            URL="https://$OWNER.github.io/$NAME"; ROOT="/$NAME/"
+          fi
+          sed -i "/^root: /d" _config.yml
+          sed -i "s|^url: .*|url: $URL\nroot: $ROOT|" _config.yml
+          echo "site url -> $URL  root -> $ROOT"
+
       - name: Generate site
         run: npx hexo generate
 

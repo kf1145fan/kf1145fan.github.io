@@ -62,37 +62,40 @@
 
 > **SITE_URL 是干什么的？** 就是博客的对外域名，用在邮件订阅的退订链接、评论通知里的站点地址等。现在它会自动取请求域名，所以绑好域名后不用手动配。
 
-### 4. D1 数据库
+### 4. 仓库变量 Variables（可选）
 
-评论、访问量、订阅、站点设置都存在 D1：
+进入 **Settings → Secrets and variables → Actions → Variables**，可添加：
+
+| Variable | 说明 |
+| --- | --- |
+| `SITE_URL` | 你的博客对外域名（如 `https://blog.example.com`）。设置后：构建时用它作站点地址、发布通知回调到它、评论 `SECURE_DOMAINS` 用它 |
+
+不设置也能跑：站点地址会按仓库自动推导为 `https://<owner>.github.io`。
+
+### 5. D1 数据库（自动创建，无需手填）
+
+评论、访问量、订阅、站点设置都存在 D1。**部署时会自动查询/创建名为 `waline-db` 的数据库并回填 id**，`wrangler.toml` 里保持占位符即可：
 
 ```toml
 [[d1_databases]]
 binding       = "DB"
 database_name = "waline-db"
-database_id   = "5edf90b0-98f2-4258-a7ae-15db7e2ba0f6"
+database_id   = "00000000-0000-0000-0000-000000000000"   # 占位符，部署时自动替换
 migrations_dir = "migrations"
 ```
 
-若换成自己的库：新建 D1 → 把 `database_id` 换成新库 ID，并执行迁移（见下）。
+> 如果你在 Cloudflare 已有同名库会自动复用；没有则自动新建。想换库名，改 `database_name` 即可。
 
-### 5. 自定义域名路由（重要）
+### 6. 访问地址（workers.dev / 自定义域名）
 
-Worker 访问地址由 wrangler.toml 的 `[[routes]]` 决定，当前默认是注释状态：
+`workers_dev = true`，所以部署后会自动获得一个 `https://blog-worker.<你的子域>.workers.dev` 地址，**不绑域名也能先用**。
 
-```toml
-# [[routes]]
-# pattern = "blog.902786.xyz"
-# custom_domain = true
-```
+要绑定自己的域名，二选一：
 
-要让 `blog.902786.xyz` 走这个 Worker，二选一：
+- Cloudflare 控制台 **Workers & Pages → blog-worker → Settings → Domains & Routes** 手动绑定；或
+- 取消 `wrangler.toml` 里 `[[routes]]` 的注释并改成自己的域名，让部署时自动绑定。
 
-- 在 Cloudflare 控制台 **Workers & Pages → blog-worker → Settings → Domains & Routes** 手动绑定自定义域名；或
-- 取消上面注释，让部署时自动绑定。
-
-> 注意：`workers_dev = false`，所以不会生成 `*.workers.dev` 地址，必须绑定自定义域名才能访问。
-> 若域名未绑定到 Worker，访问 `/api/visit/stats` 之类接口会返回 **522**（Cloudflare 连不上源站）。
+> 若域名已解析到其他服务但未绑定到 Worker，访问接口可能返回 **522**（Cloudflare 连不上源站）。
 
 ---
 
@@ -115,7 +118,7 @@ gh workflow run "仅更新 GitHub Pages" --ref main
 curl -X POST \
   -H "Authorization: Bearer <你的 GH_TOKEN>" \
   -H "Accept: application/vnd.github+json" \
-  https://api.github.com/repos/kf1145fan/kf1145fan.github.io/actions/workflows/update-cf.yml/dispatches \
+  https://api.github.com/repos/<owner>/<repo>/actions/workflows/update-cf.yml/dispatches \
   -d '{"ref":"main"}'
 ```
 
@@ -127,14 +130,17 @@ curl -X POST \
 | 仅更新 Cloudflare Worker | `update-cf.yml` | 只重新部署 blog-worker（含 D1 迁移） | 只改了 Worker 代码时（最常用） |
 | 仅更新 GitHub Pages | `update-gh.yml` | 只重新构建 Hexo 并推 gh-pages | 只改了文章/主题时；后台「发布新文章」会自动带参数调用它 |
 
-### 首次部署顺序
+### 首次部署顺序（fork 后同样适用）
 
-1. 配好上面所有 Secrets 与 `wrangler.toml`。
-2. 新建/确认 D1 数据库并把 `database_id` 填对。
-3. 运行 **完整部署**（`deploy.yml`），等三个 job 全部 success。
-4. 绑定自定义域名到 Worker（见上文第 5 点）。
-5. 打开 `https://blog.902786.xyz/admin` → 首次会引导**创建管理员**账号（无用户时 `needConfirm` 自动切到创建表单）。
-6. 在后台「设置」里按需配置：SMTP 邮件、订阅模板、AI（接口地址 / 密钥 / 模型 / 权限）。
+1. **Fork 本仓库**（或复制到你自己的仓库）。
+2. 在**你自己的仓库**里添加 3 个必需 Secrets：`GH_TOKEN`、`CF_API_TOKEN`、`CF_ACCOUNT_ID`（见第 1、2 节）。
+3. （可选）加仓库 Variable `SITE_URL` 指向你的博客域名。
+4. 运行 **完整部署**（`deploy.yml`），等 job 全部 success。D1 会自动创建，Worker 会自动配置。
+5. 记下日志里的 `*.workers.dev` 地址，或绑定自定义域名（见第 6 节）。
+6. 打开 `<你的地址>/admin` → 首次会引导**创建管理员**账号。
+7. 在后台「设置」里按需配置：SMTP 邮件、订阅模板、AI（接口地址 / 密钥 / 模型 / 权限）。
+
+> **任何人 fork 后都能直接部署**：仓库名、Pages 地址、D1 数据库、站点地址、访问域名全部自动识别，只需填上面 3 个 Secret。
 
 ---
 
@@ -173,6 +179,7 @@ npx wrangler d1 migrations apply waline-db --remote
 ## 六、常见问题
 
 - **改了代码但页面没变**：两个工作流都是手动触发，`push` 不会自动部署，需要去 Actions 手动运行 `update-cf.yml`。
-- **访问接口返回 522**：自定义域名没绑定到 Worker，或绑定后源站不可达；检查第 2.5 节的域名路由。
+- **访问接口返回 522**：自定义域名没绑定到 Worker，或绑定后源站不可达；检查第 6 节的域名路由。
+- **不想配域名**：`workers_dev = true`，直接用日志里的 `*.workers.dev` 地址即可访问。
 - **登录态频繁失效**：未设置 `JWT_SECRET` 仓库 Secret，导致每次部署重新随机生成。
 - **评论登录态失效**：同上，设置 `WALINE_JWT_SECRET`。

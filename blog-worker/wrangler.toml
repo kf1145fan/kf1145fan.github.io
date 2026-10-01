@@ -2,19 +2,21 @@ name = "blog-worker"
 main = "src/index.ts"
 compatibility_date = "2026-06-03"
 compatibility_flags = ["nodejs_compat"]
-workers_dev = false
+# 开启 workers.dev 子域名：任何人 fork 后都能先拿到一个可访问地址（绑定自定义域名后可继续用）
+workers_dev = true
 
+# ===================== 通常无需修改本文件 =====================
 # 环境变量（作为 secret 或 var 注入）：
 # GH_TOKEN                 GitHub PAT（仓库读写，用于发布/更新/删除博客文章）
-# GH_REPO                  形如 kf1145fan/kf1145fan.github.io
+# GH_REPO                  形如 owner/repo，部署时由工作流自动注入
 # GH_BRANCH                hexo 源分支，默认 main
 # POSTS_DIR                hexo 文章目录，默认 source/_posts
-# PAGES_URL                GitHub Pages 站点地址，默认 https://kf1145fan.github.io
-# SITE_URL                 博客对外域名，默认 https://blog.902786.xyz
-# JWT_SECRET               评论后台管理员 JWT 密钥（务必设置，用于 /admin 登录）
+# PAGES_URL                GitHub Pages 地址，未配置时按 GH_REPO 推导
+# SITE_URL                 博客对外域名，未配置时自动取当前请求域名
+# JWT_SECRET               后台登录 JWT 密钥（不填则首次部署自动生成）
 # SECURE_DOMAINS           评论 CORS 允许的域名，逗号分隔（默认放行）
-
-# 以下变量通常【无需手动配置】：
+#
+# 以下变量无需手动配置：
 # - GH_REPO   ：部署时由 GitHub Actions 自动注入（= 当前仓库 owner/repo）
 # - PAGES_URL ：未配置时 Worker 按 GH_REPO 自动推导为 https://<owner>.github.io
 # - SITE_URL  ：未配置时 Worker 自动取「当前请求的域名」（绑定域名后即生效，邮件链接也用它）
@@ -27,14 +29,16 @@ workers_dev = false
 # PAGES_URL = "https://owner.github.io"
 # SITE_URL  = "https://你的博客域名"
 
-# Waline 评论数据存储：D1 数据库（沿用 waline-db，评论数据已在此库中）
+# Waline 评论数据存储：D1 数据库
+# database_id 是占位符（全 0 UUID，保证本地 wrangler dev 能通过格式校验），
+# 部署工作流会自动查询/创建 waline-db 并把这里替换成真实 id。
 [[d1_databases]]
 binding = "DB"
 database_name = "waline-db"
-database_id = "5edf90b0-98f2-4258-a7ae-15db7e2ba0f6"
+database_id = "00000000-0000-0000-0000-000000000000"
 migrations_dir = "migrations"
 
-# 自定义域名路由（如已绑定则保留）
+# 自定义域名路由（如需绑定，取消注释并改成自己的域名）
 # [[routes]]
-# pattern = "blog.902786.xyz"
+# pattern = "your.domain.com"
 # custom_domain = true

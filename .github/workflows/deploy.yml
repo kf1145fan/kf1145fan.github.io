@@ -10,6 +10,35 @@ permissions:
   id-token: write
 
 jobs:
+  # ---- 0. 自动查询/创建 D1 数据库（任何人 fork 后都无需手填 id）----
+  prepare-d1:
+    runs-on: ubuntu-latest
+    outputs:
+      d1_id: ${{ steps.d1.outputs.id }}
+    steps:
+      - name: Ensure D1 database
+        id: d1
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+        run: |
+          set -e
+          DB_NAME="waline-db"
+          API="https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/d1/database"
+          get_id() { curl -s "$API?per_page=100" -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" | jq -r --arg n "$DB_NAME" '.result[]? | select(.name==$n) | .uuid' | head -1; }
+          ID="$(get_id || true)"
+          if [ -z "$ID" ] || [ "$ID" = "null" ]; then
+            echo "未找到 D1 库 $DB_NAME，正在创建..."
+            curl -s -X POST "$API" -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+              -H "Content-Type: application/json" -d "{\"name\":\"$DB_NAME\"}" >/dev/null || true
+            ID="$(get_id || true)"
+          fi
+          if [ -z "$ID" ] || [ "$ID" = "null" ]; then
+            echo "::error::无法获取 D1 数据库 id，请检查 CF_API_TOKEN 是否具备 D1:Edit 权限"; exit 1
+          fi
+          echo "id=$ID" >> $GITHUB_OUTPUT
+          echo "D1 id -> $ID"
+
   # ---- 1. 构建 Hexo 并部署到 GitHub Pages（gh-pages 分支）----
   build-blog:
     runs-on: ubuntu-latest
@@ -23,6 +52,25 @@ jobs:
 
       - name: Install Hexo deps
         run: npm install
+
+      # 站点地址：优先用仓库 Variables 的 SITE_URL；否则按仓库推导 GitHub Pages 地址。
+      # 这样 fork 后生成的页面/资源链接指向自己的地址，而不是上游域名。
+      - name: Set site URL in _config.yml
+        env:
+          SITE_URL_VAR: ${{ vars.SITE_URL }}
+        run: |
+          OWNER="${{ github.repository_owner }}"
+          NAME="${{ github.repository }}"; NAME="${NAME##*/}"
+          if [ -n "$SITE_URL_VAR" ]; then
+            URL="${SITE_URL_VAR%/}"; ROOT="/"
+          elif [ "$(echo "$NAME" | tr 'A-Z' 'a-z')" = "$(echo "$OWNER" | tr 'A-Z' 'a-z').github.io" ]; then
+            URL="https://$OWNER.github.io"; ROOT="/"
+          else
+            URL="https://$OWNER.github.io/$NAME"; ROOT="/$NAME/"
+          fi
+          sed -i "/^root: /d" _config.yml
+          sed -i "s|^url: .*|url: $URL\nroot: $ROOT|" _config.yml
+          echo "site url -> $URL  root -> $ROOT"
 
       - name: Generate site
         run: npx hexo generate
@@ -55,6 +103,7 @@ jobs:
   # 使用社区项目 Waline_On_Worker (https://github.com/lsy-404/Waline_On_Worker)
   deploy-waline:
     runs-on: ubuntu-latest
+    needs: prepare-d1
     outputs:
       waline_url: ${{ steps.deploy.outputs.waline_url }}
     steps:
@@ -79,22 +128,26 @@ jobs:
       - name: Generate wrangler.toml
         working-directory: waline-worker
         env:
-          D1_DB_ID: "5edf90b0-98f2-4258-a7ae-15db7e2ba0f6"
+          # D1 id 由 prepare-d1 任务自动查询/创建，fork 后无需手填
+          D1_DB_ID: ${{ needs.prepare-d1.outputs.d1_id }}
+          SITE_URL_VAR: ${{ vars.SITE_URL }}
         run: |
-          cat > wrangler.toml << 'EOF'
+          # SECURE_DOMAINS：优先取仓库 Variables 的 SITE_URL 域名，否则用仓库的 GitHub Pages 域名
+          DOMAIN="$(echo "$SITE_URL_VAR" | sed -E 's#^https?://##; s#/.*$##')"
+          if [ -z "$DOMAIN" ]; then DOMAIN="${{ github.repository_owner }}.github.io"; fi
+          cat > wrangler.toml << EOF
           name = "waline-worker"
           main = "src/index.ts"
           compatibility_date = "2026-06-03"
 
           [vars]
-          SECURE_DOMAINS = "902786.xyz"
+          SECURE_DOMAINS = "$DOMAIN"
 
           [[d1_databases]]
           binding = "DB"
           database_name = "waline-db"
-          database_id = "PLACEHOLDER_DB_ID"
+          database_id = "$D1_DB_ID"
           EOF
-          sed -i "s/PLACEHOLDER_DB_ID/$D1_DB_ID/" wrangler.toml
           cat wrangler.toml
 
       - name: Generate JWT_SECRET
@@ -143,7 +196,7 @@ jobs:
   # ---- 3. 部署 blog-worker 到 Cloudflare（整合 Waline 评论，挂载 /waline）----
   deploy-worker:
     runs-on: ubuntu-latest
-    needs: [build-blog, deploy-waline]
+    needs: [build-blog, deploy-waline, prepare-d1]
     env:
       GH_TOKEN: ${{ secrets.GH_TOKEN }}
     steps:
@@ -157,6 +210,12 @@ jobs:
       - name: Install worker deps
         working-directory: blog-worker
         run: npm install
+
+      - name: Fill D1 id into wrangler.toml
+        working-directory: blog-worker
+        run: |
+          sed -i "s/00000000-0000-0000-0000-000000000000/${{ needs.prepare-d1.outputs.d1_id }}/g" wrangler.toml
+          grep -m1 database_id wrangler.toml
 
       # D1 表结构已由 waline-db 初始化；先尝试 apply，失败不阻断部署（若需手工初始化再处理）
       - name: Apply D1 migrations (create comment tables)
