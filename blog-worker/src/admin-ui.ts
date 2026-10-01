@@ -177,9 +177,10 @@ a{color:var(--accent);text-decoration:none}
 .ai-col{max-width:748px;width:100%;padding:18px 16px;display:flex;flex-direction:column;gap:16px}
 .ai-msg{display:flex;flex-direction:column;gap:4px;min-width:0}
 .ai-msg.user{align-items:flex-end}
-.ai-msg.assistant{align-items:flex-start}
+.ai-msg.assistant{align-items:stretch}
 .ai-who{font-size:11px;color:var(--muted)}
-.ai-body{white-space:pre-wrap;word-break:break-word;line-height:1.7;font-size:14px;border-radius:2px}
+/* 正文严格限制在气泡内换行：长链接/长串也不会顶出左右两边 */
+.ai-body{white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere;max-width:100%;line-height:1.7;font-size:14px;border-radius:2px}
 .ai-msg.assistant .ai-body{background:transparent;border:none;padding:0}
 .ai-msg.user .ai-body{max-width:82%;padding:8px 12px;background:var(--hover);border:1px solid var(--border)}
 /* Markdown 渲染 */
@@ -210,7 +211,7 @@ a{color:var(--accent);text-decoration:none}
 /* 思考过程（可展开/收起） */
 .ai-think{border:1px dashed var(--border);border-radius:2px;padding:6px 10px;margin:0 0 8px;font-size:12.5px;color:var(--muted);background:var(--hover)}
 .ai-think>summary{cursor:pointer;font-size:12px;color:var(--muted);outline:none}
-.ai-think-body{margin-top:6px;white-space:pre-wrap;word-break:break-word;line-height:1.7}
+.ai-think-body{margin-top:6px;white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere;line-height:1.7}
 /* 批量工具调用：默认折叠，可展开 */
 .ai-tools-fold{border:1px solid var(--border);border-radius:2px;background:var(--hover);margin:4px 0}
 .ai-tools-fold>summary{cursor:pointer;font-size:12px;color:var(--muted);padding:6px 10px;outline:none}
@@ -219,6 +220,10 @@ a{color:var(--accent);text-decoration:none}
 .ai-input{display:flex;gap:8px;align-items:flex-end;padding:8px 14px 12px;flex-shrink:0}
 /* 输入框不显示拖拽手柄：随内容自动向上增高（到上限后内部滚动） */
 .ai-input textarea{flex:1;resize:none;min-height:34px;max-height:220px;overflow-y:hidden;border-radius:2px}
+/* 生成中：发送键原地变成灰色「停止」 */
+#aiSendBtn{flex:0 0 auto}
+#aiSendBtn.stop{background:var(--muted);color:#fff}
+#aiSendBtn.stop:hover{background:var(--muted);opacity:.88}
 .ai-foot{display:flex;align-items:center;gap:8px;flex-wrap:nowrap;overflow-x:auto;padding:10px 14px 0;border-top:1px solid var(--border);flex-shrink:0}
 .ai-foot .wk-label{flex:0 0 auto;white-space:nowrap}
 .ai-foot select.wk-input{flex-shrink:1}
@@ -1172,7 +1177,7 @@ function aiTurnHtml(turn, startIdx){
     : '';
   const toolsHtml = tools
     ? (toolCount > 1
-        ? '<details class="ai-tools-fold" open><summary>调用工具 ' + toolCount + ' 次' + (anyDenied ? '（含被拒绝）' : '') + '</summary><div>' + tools + '</div></details>'
+        ? '<details class="ai-tools-fold"><summary>调用工具 ' + toolCount + ' 次' + (anyDenied ? '（含被拒绝）' : '') + '</summary><div>' + tools + '</div></details>'
         : tools)
     : '';
   const acts = hasText
@@ -1202,6 +1207,13 @@ function aiBubbleHtml(role, content, idx, m){
 }
 function scrollAiBottom(){ const box = $('#aiMessages'); if(box) box.scrollTop = box.scrollHeight; }
 function aiStop(){ if(aiAbort){ try{ aiAbort.abort(); }catch(e){} } }
+// 发送键状态：生成中原地变成灰色「停止」按钮（同一个按钮，不额外加按钮）
+function aiSetSendState(busy){
+  const b = $('#aiSendBtn'); if(!b) return;
+  b.textContent = busy ? '停止' : '发送';
+  b.title = busy ? '停止生成' : '发送';
+  if(busy) b.classList.add('stop'); else b.classList.remove('stop');
+}
 
 // 输入框自动增高（底部对齐，视觉上向上拉升）；超过上限后内部滚动
 function aiAutoGrow(){
@@ -1212,7 +1224,7 @@ function aiAutoGrow(){
   el.style.overflowY = el.scrollHeight > max ? 'auto' : 'hidden';
 }
 async function aiSend(){
-  if(aiStreaming) return;
+  if(aiStreaming){ aiStop(); return; } // 生成中：该按钮就是「停止」
   const input = $('#aiInput');
   const text = ((input && input.value) || '').trim();
   if(!text){ toast('请输入内容', true); return; }
@@ -1232,8 +1244,7 @@ async function aiAgentLoop(){
   const modelEl = $('#aiChatModel');
   const modelName = modelEl ? modelEl.value.trim() : '';
   aiStreaming = true;
-  const sendBtn = $('#aiSendBtn'); if(sendBtn) sendBtn.disabled = true;
-  const stopBtn = $('#aiStopBtn'); if(stopBtn) stopBtn.style.display = '';
+  aiSetSendState(true);
   const msg = $('#aiChatMsg'); if(msg){ msg.className = 'msg'; msg.textContent = ''; }
   aiAbort = new AbortController();
   let rounds = 0;
@@ -1305,8 +1316,7 @@ async function aiAgentLoop(){
     }
   }finally{
     aiStreaming = false; aiAbort = null;
-    if(sendBtn) sendBtn.disabled = false;
-    if(stopBtn) stopBtn.style.display = 'none';
+    aiSetSendState(false);
   }
   await aiSaveConversation();
   scrollAiBottom();
@@ -2675,7 +2685,6 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
               <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
             </button>
             <button class="wk-btn ghost sm" id="aiFullBtn" onclick="aiToggleFull()" title="全屏 / 退出全屏">全屏</button>
-            <button class="wk-btn ghost sm" id="aiStopBtn" style="display:none" onclick="aiStop()">停止</button>
           </div>
         </div>
         <div id="aiMessages" class="ai-scroll"><div class="ai-col" id="aiCol"><div class="empty">开始和 AI 对话吧</div></div></div>
