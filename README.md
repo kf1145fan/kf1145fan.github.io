@@ -46,18 +46,21 @@
 - `D1: Edit`
 - `Account Settings: Read`
 
-### 3. Worker 变量（`blog-worker/wrangler.toml`）
+### 3. Worker 变量（`blog-worker/wrangler.toml`）—— 通常无需填写
 
-```toml
-[vars]
-GH_REPO   = "kf1145fan/kf1145fan.github.io"  # 仓库 owner/repo
-GH_BRANCH = "main"                            # Hexo 源分支
-POSTS_DIR = "source/_posts"                   # 文章目录
-PAGES_URL = "https://kf1145fan.github.io"     # GitHub Pages 地址
-SITE_URL  = "https://blog.902786.xyz"         # 博客对外域名
-```
+这些变量 Worker 都能自动识别，`wrangler.toml` 里保持默认（注释状态）即可：
 
-改仓库/域名时，改这里即可。`GH_TOKEN`、`JWT_SECRET` 属于密钥，走 Secret 注入，**不要写进这个文件**。
+| 变量 | 是否要填 | 说明 |
+| --- | --- | --- |
+| `GH_REPO` | 不用 | 部署时由工作流自动注入 `${{ github.repository }}` |
+| `PAGES_URL` | 不用 | 未配置时按 `GH_REPO` 推导为 `https://<owner>.github.io` |
+| `SITE_URL` | 不用 | 未配置时自动取**当前请求的域名**；绑定好域名后即生效，邮件里的链接也用它 |
+| `GH_BRANCH` | 不用 | 默认 `main` |
+| `POSTS_DIR` | 不用 | 默认 `source/_posts` |
+
+只有需要覆盖默认行为时，才在 `wrangler.toml` 的 `[vars]` 里手填。`GH_TOKEN`、`JWT_SECRET` 属于密钥，走 Secret 注入，**不要写进这个文件**。
+
+> **SITE_URL 是干什么的？** 就是博客的对外域名，用在邮件订阅的退订链接、评论通知里的站点地址等。现在它会自动取请求域名，所以绑好域名后不用手动配。
 
 ### 4. D1 数据库
 

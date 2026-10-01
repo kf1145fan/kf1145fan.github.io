@@ -14,12 +14,18 @@ workers_dev = false
 # JWT_SECRET               评论后台管理员 JWT 密钥（务必设置，用于 /admin 登录）
 # SECURE_DOMAINS           评论 CORS 允许的域名，逗号分隔（默认放行）
 
+# 以下变量通常【无需手动配置】：
+# - GH_REPO   ：部署时由 GitHub Actions 自动注入（= 当前仓库 owner/repo）
+# - PAGES_URL ：未配置时 Worker 按 GH_REPO 自动推导为 https://<owner>.github.io
+# - SITE_URL  ：未配置时 Worker 自动取「当前请求的域名」（绑定域名后即生效，邮件链接也用它）
+# - GH_BRANCH / POSTS_DIR：不填时用默认值 main / source/_posts
+# 如需覆盖默认行为，取消下面注释并填写即可：
 [vars]
-GH_REPO = "kf1145fan/kf1145fan.github.io"
-GH_BRANCH = "main"
-POSTS_DIR = "source/_posts"
-PAGES_URL = "https://kf1145fan.github.io"
-SITE_URL = "https://blog.902786.xyz"
+# GH_REPO   = "owner/repo"
+# GH_BRANCH = "main"
+# POSTS_DIR = "source/_posts"
+# PAGES_URL = "https://owner.github.io"
+# SITE_URL  = "https://你的博客域名"
 
 # Waline 评论数据存储：D1 数据库（沿用 waline-db，评论数据已在此库中）
 [[d1_databases]]

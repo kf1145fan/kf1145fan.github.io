@@ -174,7 +174,8 @@ jobs:
           apiToken: ${{ secrets.CF_API_TOKEN }}
           accountId: ${{ secrets.CF_ACCOUNT_ID }}
           workingDirectory: blog-worker
-          command: deploy
+          # GH_REPO 自动取当前仓库；PAGES_URL、SITE_URL 由 Worker 运行时自动推导，无需配置
+          command: "deploy --var GH_REPO:${{ github.repository }}"
           secrets: |
             GH_TOKEN
         env:

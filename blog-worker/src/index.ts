@@ -28,6 +28,36 @@ const json = (body: unknown, status = 200) =>
     headers: { "content-type": "application/json; charset=utf-8" },
   });
 
+// ---------- 0. 配置兜底：减少部署时的手动填写 ----------
+// SITE_URL（对外域名）：未显式配置时，自动取当前请求的域名。
+// 因此绑定自定义域名 / Workers 自带域名后，无需再手动配置该项（邮件里的链接也会用该域名）。
+app.use("*", async (c, next) => {
+  const env = c.env as Bindings;
+  if (!env.SITE_URL) {
+    try {
+      (env as { SITE_URL?: string }).SITE_URL = new URL(c.req.url).origin;
+    } catch {
+      /* ignore */
+    }
+  }
+  await next();
+});
+
+// PAGES_URL（GitHub Pages 地址）：未配置时按 GH_REPO 推导，形如 https://<owner>.github.io[/repo]
+function pagesBaseUrl(env: Bindings): string {
+  const raw = (env.PAGES_URL || "").trim();
+  if (raw) return raw.replace(/\/+$/, "");
+  const m = /^([^/\s]+)\/([^/\s]+)$/.exec((env.GH_REPO || "").trim());
+  if (m) {
+    const owner = m[1];
+    const name = m[2];
+    return name.toLowerCase() === owner.toLowerCase() + ".github.io"
+      ? `https://${owner}.github.io`
+      : `https://${owner}.github.io/${name}`;
+  }
+  return "https://kf1145fan.github.io";
+}
+
 // ---------- 1. 统一鉴权（复用 Waline 管理员 JWT）----------
 function isAdmin(user?: UserInfo): boolean {
   return !!user && user.type === "administrator";
@@ -1962,10 +1992,7 @@ app.all("*", async (c) => {
     return Response.redirect(`${url.origin}/admin`, 302);
   }
 
-  const pagesBase = (env.PAGES_URL || "https://kf1145fan.github.io").replace(
-    /\/$/,
-    "",
-  );
+  const pagesBase = pagesBaseUrl(env);
   const target = new URL(path || "/", pagesBase);
   if (path.endsWith("/")) {
     target.pathname = `${path}index.html`;
@@ -2126,7 +2153,7 @@ async function handleWritePost(
     // 手动运行工作流不会带 notify 参数，所以不会发邮件。
     let notifyPipeline = false;
     if (!isUpdate) {
-      const pagesUrl = (env.PAGES_URL || "").replace(/\/+$/, "");
+      const pagesUrl = pagesBaseUrl(env);
       const pageTitle = filename.replace(/\.md$/, "");
       const postUrl = pagesUrl
         ? pagesUrl +
