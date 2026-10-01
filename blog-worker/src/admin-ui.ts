@@ -1222,45 +1222,53 @@ function aiToggleUsage(ev){
   aiPositionUsagePop();
   setTimeout(function(){ document.addEventListener('click', aiCloseUsage); }, 0);
 }
-// 一整轮 AI 回复（assistant + 其后的工具结果）渲染成一个气泡：
-// 顺序为 思考 → 正文 → 工具调用（在 AI 说的话下面）→ 操作。
+// 一整轮 AI 回复（assistant + 其后的工具结果）渲染成一个气泡。
+// 严格按 AI 实际发生的先后顺序排列：思考 → 正文 → 工具调用 → （下一段）思考 → …，
+// 即「先干什么就先显示什么」，不再把全部工具统一挪到最后。
 // 生成过程中不显示「AI」标签与「复制」按钮，避免运行时的重复标记。
 function aiTurnHtml(turn, startIdx){
   const resById = {};
   turn.forEach(function(m){ if(m && m.role === 'tool' && m.tool_call_id) resById[m.tool_call_id] = m; });
-  let think = '', body = '', tools = '', hasText = false, toolCount = 0, anyDenied = false, lastCall = '';
+  // 本轮工具调用总数：>1 时每批调用各自折叠，仍保持各自的先后位置
+  let totalTools = 0;
+  turn.forEach(function(m){ if(m && m.role !== 'tool' && m.tool_calls && m.tool_calls.length) totalTools += m.tool_calls.length; });
+  let parts = '', hasText = false;
   for(let k = 0; k < turn.length; k++){
     const m = turn[k] || {};
-    if(m.role === 'tool') continue; // 已在其「调用」处合并展示
-    if(m.reasoning) think += (think ? '\\n\\n' : '') + m.reasoning;
-    if(m.content){ hasText = true; body += '<div class="ai-body md">' + renderMd(m.content) + '</div>'; }
+    if(m.role === 'tool') continue; // 结果已合并到对应「调用」处展示
+    // 1) 思考
+    if(m.reasoning){
+      parts += '<details class="ai-think" data-k="think-' + startIdx + '-' + k + '"><summary>思考过程</summary><div class="ai-think-body">' + esc(m.reasoning) + '</div></details>';
+    }
+    // 2) 正文
+    if(m.content){ hasText = true; parts += '<div class="ai-body md">' + renderMd(m.content) + '</div>'; }
+    // 3) 本段之后的工具调用（紧跟在这段内容之后，保持真实顺序）
     if(m.tool_calls && m.tool_calls.length){
+      let batch = '', lastCall = '', denied = false;
       m.tool_calls.forEach(function(t){
         const f = t.function || {};
         const r = resById[t.id];
-        if(r && r.denied) anyDenied = true;
-        toolCount++;
-        // 记录最新一次调用，供折叠状态下在摘要行展示（不展示返回结果）
+        if(r && r.denied) denied = true;
         const aStr = String(f.arguments == null ? '' : f.arguments).replace(/\\s+/g, ' ').trim().slice(0, 120);
         lastCall = (f.name || '') + (aStr ? ' ' + aStr : '');
-        tools += aiToolMergedHtml(f.name, f.arguments, r);
+        batch += aiToolMergedHtml(f.name, f.arguments, r);
       });
+      const fold = totalTools > 1 || m.tool_calls.length > 1;
+      if(fold){
+        const head = (m.tool_calls.length > 1 ? '调用工具 ' + m.tool_calls.length + ' 次' : '调用工具') +
+          (denied ? '（含被拒绝）' : '') +
+          (lastCall ? ' · <span class="ai-tools-last">' + esc(lastCall) + '</span>' : '');
+        parts += '<details class="ai-tools-fold" data-k="tools-' + startIdx + '-' + k + '"><summary>' + head + '</summary><div>' + batch + '</div></details>';
+      } else {
+        parts += batch;
+      }
     }
   }
-  const thinkHtml = think
-    ? '<details class="ai-think" data-k="think-' + startIdx + '"><summary>思考过程</summary><div class="ai-think-body">' + esc(think) + '</div></details>'
-    : '';
-  const toolsHtml = tools
-    ? (toolCount > 1
-        ? '<details class="ai-tools-fold" data-k="tools-' + startIdx + '"><summary>调用工具 ' + toolCount + ' 次' + (anyDenied ? '（含被拒绝）' : '') +
-            (lastCall ? ' · <span class="ai-tools-last">' + esc(lastCall) + '</span>' : '') + '</summary><div>' + tools + '</div></details>'
-        : tools)
-    : '';
   const acts = (!aiStreaming && hasText)
     ? '<div class="ai-acts"><button title="复制本段回复内容" onclick="aiCopyTurn(' + startIdx + ')">复制</button></div>'
     : '';
   const whoHtml = aiStreaming ? '' : '<div class="ai-who">AI</div>';
-  return '<div class="ai-msg assistant">' + whoHtml + thinkHtml + body + toolsHtml + acts + '</div>';
+  return '<div class="ai-msg assistant">' + whoHtml + parts + acts + '</div>';
 }
 function aiBubbleHtml(role, content, idx, m){
   m = m || {};
