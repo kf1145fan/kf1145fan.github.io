@@ -571,7 +571,8 @@ async function loadAiSettings(){
       const en = $('#aiEnabled'); if(en) en.checked = !!d.enabled;
       const cp = $('#aiClientProxy'); if(cp) cp.checked = !!d.clientProxy;
       const pm = $('#aiPermission'); if(pm) pm.value = d.permission || 'safe';
-      aiPicked = Array.isArray(d.models) ? d.models.slice() : [];
+      aiPicked = Array.isArray(d.models) && d.models.length ? d.models.slice() : (d.model ? [String(d.model)] : []);
+      aiSyncModelsToText();
       renderAiModels();
       const pr = $('#aiPrompt'); if(pr) pr.value = d.prompt || d.defaultPrompt || '';
       const k = $('#aiApiKey');
@@ -581,8 +582,9 @@ async function loadAiSettings(){
 }
 async function saveAiSettings(){
   const en = $('#aiEnabled');
+  aiSyncModelsFromText(); // 以文本框为准（可能刚编辑过还没失焦）
   const picked = aiPicked.slice();
-  // 不再有独立的「默认模型」：以勾选的第一个模型作为助手默认，其余可在助手里切换
+  // 没有独立的「默认模型」：以第一个已选模型作为助手默认，其余可在助手里切换
   const payload = {
     baseUrl: aiVal('aiBaseUrl').trim(),
     apiKey: aiVal('aiApiKey'),
@@ -606,61 +608,56 @@ async function saveAiSettings(){
     if(msg){ msg.className='msg err'; msg.textContent=err; }
   }
 }
-// 测试连通性：对「已勾选」的每个模型各发一个最小请求，逐个给出结果
+// 测试连通性：只用第一个已选模型发一个最小请求
 async function testAiSettings(){
   const msg = $('#aiMsg');
-  const models = aiPicked.slice();
-  if(!models.length){
-    if(msg){ msg.className='msg err'; msg.textContent='请先在下方勾选要测试的模型'; }
-    toast('请先勾选要测试的模型', true);
+  aiSyncModelsFromText();
+  const model = aiPicked[0] || '';
+  if(!model){
+    if(msg){ msg.className='msg err'; msg.textContent='请先填写或勾选一个模型'; }
+    toast('请先填写或勾选一个模型', true);
     return;
   }
   if(msg){ msg.className='msg'; msg.textContent='测试中...'; }
   toast('测试中...');
   const base = aiVal('aiBaseUrl').trim();
   const key = aiVal('aiApiKey');
-  const out = [];
-  for(let n = 0; n < models.length; n++){
-    const model = models[n];
-    try{
-      let elapsed = null, reply = '', err = '';
-      if(aiProxyOn()){
-        // 前端代理：浏览器直连服务商（绕过 Cloudflare 出网限制）
-        const k = await resolveAiKey(key);
-        const t0 = Date.now();
-        const resp = await fetch(aiJoin(base, '/chat/completions'), {
-          method:'POST',
-          headers: Object.assign({'Content-Type':'application/json'}, k ? {Authorization:'Bearer ' + k} : {}),
-          body: JSON.stringify({ model: model, messages:[{role:'user', content:'你好，这是一条连通性测试消息，请回复一句话确认。'}], max_tokens:32 })
-        });
-        elapsed = Date.now() - t0;
-        const d = await resp.json().catch(()=>({}));
-        if(resp.ok){
-          reply = (d.choices && d.choices[0] && d.choices[0].message && d.choices[0].message.content) || '';
-        } else {
-          err = (d.error && (d.error.message || d.error)) || ('HTTP ' + resp.status);
-        }
+  try{
+    let elapsed = null, reply = '', err = '';
+    if(aiProxyOn()){
+      // 前端代理：浏览器直连服务商（绕过 Cloudflare 出网限制）
+      const k = await resolveAiKey(key);
+      const t0 = Date.now();
+      const resp = await fetch(aiJoin(base, '/chat/completions'), {
+        method:'POST',
+        headers: Object.assign({'Content-Type':'application/json'}, k ? {Authorization:'Bearer ' + k} : {}),
+        body: JSON.stringify({ model: model, messages:[{role:'user', content:'你好，这是一条连通性测试消息，请回复一句话确认。'}], max_tokens:32 })
+      });
+      elapsed = Date.now() - t0;
+      const d = await resp.json().catch(()=>({}));
+      if(resp.ok){
+        reply = (d.choices && d.choices[0] && d.choices[0].message && d.choices[0].message.content) || '';
       } else {
-        const r = await api('/admin/api/ai/test', { method:'POST', body: JSON.stringify({ baseUrl: base, apiKey: key, model: model }) });
-        const d = (r.data || {});
-        if(r.ok && d.ok){ elapsed = d.elapsed; reply = d.reply || ''; }
-        else err = d.error || '测试失败';
+        err = (d.error && (d.error.message || d.error)) || ('HTTP ' + resp.status);
       }
-      out.push(err
-        ? { ok:false, text:'✗ ' + model + '：' + err }
-        : { ok:true, text:'✓ ' + model + '：连接成功（' + (elapsed == null ? '-' : elapsed) + 'ms）' + (reply ? ' · ' + reply : '') });
-    }catch(e){
-      const hint = aiProxyOn() ? '（前端代理直连失败，可能是服务商未开放跨域/CORS）' : '';
-      out.push({ ok:false, text:'✗ ' + model + '：' + ((e && e.message) ? e.message : e) + hint });
+    } else {
+      const r = await api('/admin/api/ai/test', { method:'POST', body: JSON.stringify({ baseUrl: base, apiKey: key, model: model }) });
+      const d = (r.data || {});
+      if(r.ok && d.ok){ elapsed = d.elapsed; reply = d.reply || ''; }
+      else err = d.error || '测试失败';
     }
+    if(err){
+      toast('测试失败：' + err, true);
+      if(msg){ msg.className='msg err'; msg.textContent='测试失败（' + model + '）：' + err; }
+    } else {
+      toast('连接成功（' + (elapsed == null ? '-' : elapsed) + 'ms）');
+      if(msg){ msg.className='msg ok'; msg.textContent='连接成功（' + model + '），耗时 ' + (elapsed == null ? '-' : elapsed) + 'ms；回复：' + (reply || '（空）'); }
+    }
+  }catch(e){
+    const hint = aiProxyOn() ? '（前端代理直连失败，可能是服务商未开放跨域/CORS）' : '';
+    toast('测试失败', true);
+    if(msg){ msg.className='msg err'; msg.textContent='测试失败（' + model + '）：' + ((e && e.message) ? e.message : e) + hint; }
   }
-  const okCount = out.filter(function(x){ return x.ok; }).length;
-  const allOk = okCount === out.length;
-  if(msg){
-    msg.className = allOk ? 'msg ok' : 'msg err';
-    msg.innerHTML = out.map(function(x){ return esc(x.text); }).join('<br>');
-  }
-  toast(allOk ? ('全部连通 ' + okCount + '/' + out.length) : ('连通 ' + okCount + '/' + out.length), !allOk);
 }
 async function loadAiModels(){
   const box = $('#aiModelList');
@@ -725,9 +722,26 @@ function renderAiModels(){
       '<span class="ai-pick-n">' + esc(m) + '</span></label>';
   }).join('');
 }
+// 「已选的模型」文本框 → 勾选列表。用户正在输入，不回写文本框以免打断光标
+function aiSyncModelsFromText(){
+  const el = $('#aiModelsText'); if(!el) return;
+  const seen = {}, arr = [];
+  String(el.value || '').split(/[,，]/).forEach(function(s){
+    const v = s.trim();
+    if(!v || seen[v]) return;
+    seen[v] = 1; arr.push(v);
+  });
+  aiPicked = arr;
+  renderAiModels();
+}
+// 勾选列表 → 「已选的模型」文本框（点勾选框 / 全选 / 清空时调用）
+function aiSyncModelsToText(){
+  const el = $('#aiModelsText'); if(el) el.value = aiPicked.join(', ');
+}
 function toggleAiModel(m){
   const i = aiPicked.indexOf(m);
   if(i >= 0) aiPicked.splice(i, 1); else aiPicked.push(m);
+  aiSyncModelsToText();
   renderAiModels();
 }
 function aiPickVisible(){
@@ -737,10 +751,12 @@ function aiPickVisible(){
 }
 function aiPickAll(){
   aiPickVisible().forEach(m => { if(aiPicked.indexOf(m) < 0) aiPicked.push(m); });
+  aiSyncModelsToText();
   renderAiModels();
 }
 function aiPickNone(){
   aiPicked = [];
+  aiSyncModelsToText();
   renderAiModels();
 }
 
@@ -2936,6 +2952,8 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
         <input class="wk-input" id="aiBaseUrl" placeholder="https://api.openai.com/v1">
         <label class="wk-label" style="margin-top:12px">API 密钥</label>
         <input class="wk-input" id="aiApiKey" type="password" placeholder="留空表示不修改">
+        <label class="wk-label" style="margin-top:12px">已选的模型（多个用英文逗号分隔，可直接编辑，与下方「可选模型」联动）</label>
+        <input class="wk-input" id="aiModelsText" placeholder="如：gpt-4o-mini, deepseek-chat" oninput="aiSyncModelsFromText()">
         <label class="wk-label" style="display:flex;align-items:center;gap:6px;margin-top:10px;cursor:pointer">
           <input type="checkbox" id="aiEnabled" style="width:auto"> 启用 AI 设置
         </label>
@@ -2956,7 +2974,7 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
         </div>
         <div class="msg" id="aiMsg"></div>
         <details class="wk-collapse" style="margin-top:12px;background:transparent;border:1px solid var(--border)">
-          <summary>可选模型（勾选后用于测试连通性，AI 助手中可切换）</summary>
+          <summary>可选模型（勾选后可在 AI 助手中切换；测试连通性用第一个）</summary>
           <div class="wk-collapse-body" style="border-top:1px solid var(--border)">
             <input class="wk-input" id="aiModelSearch" placeholder="搜索模型，如 free / gpt / claude" oninput="renderAiModels()">
             <div class="filters" style="margin:8px 0 0">

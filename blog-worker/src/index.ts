@@ -553,7 +553,7 @@ app.post("/admin/api/ai/test", async (c) => {
     const model = (body.model ? String(body.model) : cfg.model).trim();
     if (!baseUrl) return json({ ok: false, error: "请先填写 API 地址" }, 400);
     if (!model)
-      return json({ ok: false, error: "请先选择模型（可点击「获取模型列表」后勾选）" }, 400);
+      return json({ ok: false, error: "请先填写或勾选一个模型" }, 400);
     const url = aiEndpoint(baseUrl, "/chat/completions");
     const started = Date.now();
     const resp = await fetch(url, {
