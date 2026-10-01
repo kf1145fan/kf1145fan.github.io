@@ -1079,6 +1079,10 @@ function aiToolNoteHtml(m){
 function renderAiMessages(){
   const box = $('#aiCol'); if(!box) return;
   if(!aiConvMessages.length){ box.innerHTML = '<div class="empty">开始和 AI 对话吧</div>'; return; }
+  // 重渲染前记住用户已展开的折叠块（思考/工具），渲染后恢复：
+  // 否则 AI 每调用一次新工具整块重建，用户刚展开的就被收起
+  const openKeys = [];
+  box.querySelectorAll('details[data-k]').forEach(d=>{ if(d.open) openKeys.push(d.getAttribute('data-k')); });
   let html = '';
   let i = 0;
   while(i < aiConvMessages.length){
@@ -1090,6 +1094,11 @@ function renderAiMessages(){
     html += aiTurnHtml(turn, start);
   }
   box.innerHTML = html;
+  if(openKeys.length){
+    box.querySelectorAll('details[data-k]').forEach(d=>{
+      if(openKeys.indexOf(d.getAttribute('data-k')) >= 0) d.open = true;
+    });
+  }
   scrollAiBottom();
 }
 // 撤回：删除该条及其之后的消息，并把该条内容放回输入框
@@ -1173,11 +1182,11 @@ function aiTurnHtml(turn, startIdx){
     }
   }
   const thinkHtml = think
-    ? '<details class="ai-think"><summary>思考过程</summary><div class="ai-think-body">' + esc(think) + '</div></details>'
+    ? '<details class="ai-think" data-k="think-' + startIdx + '"><summary>思考过程</summary><div class="ai-think-body">' + esc(think) + '</div></details>'
     : '';
   const toolsHtml = tools
     ? (toolCount > 1
-        ? '<details class="ai-tools-fold"><summary>调用工具 ' + toolCount + ' 次' + (anyDenied ? '（含被拒绝）' : '') + '</summary><div>' + tools + '</div></details>'
+        ? '<details class="ai-tools-fold" data-k="tools-' + startIdx + '"><summary>调用工具 ' + toolCount + ' 次' + (anyDenied ? '（含被拒绝）' : '') + '</summary><div>' + tools + '</div></details>'
         : tools)
     : '';
   const acts = hasText
