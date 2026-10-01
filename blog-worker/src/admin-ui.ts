@@ -172,7 +172,7 @@ a{color:var(--accent);text-decoration:none}
 .ai-conv.active{background:var(--card);border-color:var(--border);border-left-color:var(--accent)}
 .ai-conv-t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ai-main{flex:1;display:flex;flex-direction:column;min-width:0}
-.ai-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:10px 14px;border-bottom:1px solid var(--border);flex-shrink:0}
+.ai-bar{display:flex;align-items:center;gap:6px;flex-wrap:nowrap;padding:10px 14px;border-bottom:1px solid var(--border);flex-shrink:0;min-width:0}
 .ai-scroll{flex:1;overflow:auto;min-height:0;display:flex;justify-content:center}
 .ai-col{max-width:748px;width:100%;padding:18px 16px;display:flex;flex-direction:column;gap:16px}
 .ai-msg{display:flex;flex-direction:column;gap:4px;min-width:0}
@@ -229,7 +229,10 @@ a{color:var(--accent);text-decoration:none}
 .ai-pick input{width:auto;margin:0}
 .ai-pick-n{max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ai-chat.side-off .ai-side{width:0;padding-left:0;padding-right:0;border-right-width:0}
-.ai-chat-title{font-size:14px;font-weight:600;max-width:46%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:text}
+.ai-chat-title{font-size:14px;font-weight:600;flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:text}
+/* 顶栏右侧操作区：编辑/全屏/停止 强制同一行、靠右上角 */
+.ai-bar-acts{display:flex;align-items:center;gap:6px;flex:0 0 auto;margin-left:auto}
+#aiChatHint{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ai-icon-btn{display:inline-flex;align-items:center;justify-content:center;padding:4px 6px;line-height:0}
 .ai-acts{display:flex;gap:12px;margin-top:2px}
 .ai-msg.user .ai-acts{justify-content:flex-end}
@@ -256,6 +259,12 @@ a{color:var(--accent);text-decoration:none}
 .ai-side{position:absolute;top:0;left:0;bottom:0;width:min(78vw,260px);z-index:6;transition:transform .26s ease}
 .ai-chat.side-off .ai-side{width:min(78vw,260px);padding:12px;border-right-width:1px;transform:translateX(-100%)}
 .ai-scroll{min-height:0}
+/* 顶栏：所有按钮强制一行靠右上角，标题溢出省略，提示文字手机端隐藏 */
+.ai-bar{gap:4px;padding:8px 10px}
+.ai-bar .wk-btn{padding:4px 6px;font-size:12px;flex:0 0 auto;white-space:nowrap}
+.ai-bar-acts{gap:4px}
+.ai-chat-title{font-size:13px}
+#aiChatHint{display:none}
 /* 进入 AI 页时不保留容器下边距，避免底部出现可滚动的空隙 */
 .wk-wrap:has(#page-ai:not(.hidden)){margin-bottom:0}
 /* 控制行：隐藏文字标签，选择器尽量紧凑，单行不换行（不够时横向滑动） */
@@ -2660,13 +2669,14 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
         <div class="ai-bar">
           <button class="wk-btn ghost sm" id="aiSideToggle" onclick="aiToggleSide()" title="展开侧边栏" style="display:none">› 会话</button>
           <span class="ai-chat-title" id="aiChatTitle" title="双击可重命名" ondblclick="aiRenameConv()">新对话</span>
-          <button class="wk-btn ghost sm ai-icon-btn" onclick="aiRenameConv()" title="重命名对话" aria-label="重命名对话">
-            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
-          </button>
-          <div style="flex:1"></div>
           <span class="wk-label" id="aiChatHint" style="margin:0"></span>
-          <button class="wk-btn ghost sm" id="aiFullBtn" onclick="aiToggleFull()" title="全屏 / 退出全屏">全屏</button>
-          <button class="wk-btn ghost sm" id="aiStopBtn" style="display:none" onclick="aiStop()">停止</button>
+          <div class="ai-bar-acts">
+            <button class="wk-btn ghost sm ai-icon-btn" onclick="aiRenameConv()" title="编辑 / 重命名对话" aria-label="重命名对话">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+            </button>
+            <button class="wk-btn ghost sm" id="aiFullBtn" onclick="aiToggleFull()" title="全屏 / 退出全屏">全屏</button>
+            <button class="wk-btn ghost sm" id="aiStopBtn" style="display:none" onclick="aiStop()">停止</button>
+          </div>
         </div>
         <div id="aiMessages" class="ai-scroll"><div class="ai-col" id="aiCol"><div class="empty">开始和 AI 对话吧</div></div></div>
         <div class="msg" id="aiChatMsg" style="margin:0 14px"></div>
