@@ -75,12 +75,12 @@
 
 ### 5. D1 数据库（自动创建，无需手填）
 
-评论、访问量、订阅、站点设置都存在 D1。**部署时会自动查询/创建名为 `waline-db` 的数据库并回填 id**，`wrangler.toml` 里保持占位符即可：
+评论、访问量、订阅、站点设置都存在 D1。**部署时会自动查询/创建名为 `blog-db` 的数据库并回填 id**，`wrangler.toml` 里保持占位符即可：
 
 ```toml
 [[d1_databases]]
 binding       = "DB"
-database_name = "waline-db"
+database_name = "blog-db"
 database_id   = "00000000-0000-0000-0000-000000000000"   # 占位符，部署时自动替换
 migrations_dir = "migrations"
 ```
@@ -161,7 +161,7 @@ npx wrangler dev         # 本地起 Worker，需本地 D1（wrangler dev 会自
 npx wrangler deploy      # 手动部署（需先 wrangler login）
 
 # 3) 执行 D1 迁移（远程库）
-npx wrangler d1 migrations apply waline-db --remote
+npx wrangler d1 migrations apply blog-db --remote
 ```
 
 ---

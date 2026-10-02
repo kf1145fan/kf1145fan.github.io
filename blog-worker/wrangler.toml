@@ -31,10 +31,10 @@ workers_dev = true
 
 # Waline 评论数据存储：D1 数据库
 # database_id 是占位符（全 0 UUID，保证本地 wrangler dev 能通过格式校验），
-# 部署工作流会自动查询/创建 waline-db 并把这里替换成真实 id。
+# 部署工作流会自动查询/创建 blog-db 并把这里替换成真实 id。
 [[d1_databases]]
 binding = "DB"
-database_name = "waline-db"
+database_name = "blog-db"
 database_id = "00000000-0000-0000-0000-000000000000"
 migrations_dir = "migrations"
 
