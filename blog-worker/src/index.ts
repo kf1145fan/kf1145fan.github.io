@@ -1993,9 +1993,18 @@ app.all("*", async (c) => {
   }
 
   const pagesBase = pagesBaseUrl(env);
-  const target = new URL(path || "/", pagesBase);
-  if (path.endsWith("/")) {
-    target.pathname = `${path}index.html`;
+  // 注意：不能用 new URL(path, pagesBase)，因为前导 "/" 会丢掉 pagesBase 的路径前缀。
+  // 项目站点的 pagesBase 形如 https://<owner>.github.io/<repo>，必须把 /<repo> 拼回去。
+  const target = new URL(pagesBase + "/");
+  const basePath = target.pathname.replace(/\/+$/, ""); // 用户站点为 ""，项目站点为 "/<repo>"
+  let reqPath = path.startsWith("/") ? path : "/" + path;
+  // 项目站点的 Hexo root 会是 /<repo>/，页面资源会带该前缀；这里先剥掉，避免拼成 /<repo>/<repo>/...
+  if (basePath && reqPath === basePath) reqPath = "/";
+  else if (basePath && reqPath.startsWith(basePath + "/")) reqPath = reqPath.slice(basePath.length);
+  target.pathname = basePath + reqPath;
+  target.search = url.search;
+  if (reqPath.endsWith("/")) {
+    target.pathname += "index.html";
   }
   try {
     const resp = await fetch(target.toString());
@@ -2153,7 +2162,9 @@ async function handleWritePost(
     // 手动运行工作流不会带 notify 参数，所以不会发邮件。
     let notifyPipeline = false;
     if (!isUpdate) {
-      const pagesUrl = pagesBaseUrl(env);
+      // 优先用站点对外地址（SITE_URL，未配置时由中间件取当前请求域名），回退到 GitHub Pages 地址
+      const pagesUrl =
+        (env.SITE_URL || "").trim().replace(/\/+$/, "") || pagesBaseUrl(env);
       const pageTitle = filename.replace(/\.md$/, "");
       const postUrl = pagesUrl
         ? pagesUrl +
