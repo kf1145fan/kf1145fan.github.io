@@ -28,6 +28,9 @@ button:disabled{opacity:.5}
 .msg{font-size:12px;color:#dc2626;min-height:18px;margin-top:10px;white-space:pre-wrap}
 .hid{display:none}
 .link{font-size:11px;color:var(--muted);text-align:right;margin-top:8px}
+.toggle{font-size:11.5px;color:var(--muted);text-align:center;margin-top:12px}
+.toggle a{color:#f97316;text-decoration:none;cursor:pointer;border-bottom:1px dashed #f9731655}
+.toggle a:hover{color:#ea580c}
 `;
 
 const LOGIN_SCRIPT = `
@@ -58,6 +61,14 @@ async function doLogin(){
     btn.disabled=false; btn.textContent='登录';
     setMsg(d.errmsg||'登录失败');
     if(d.data&&d.data['2fa']) $('#twofaWrap').classList.remove('hid');
+    // 账号不存在且站点还没有任何用户：自动切到「创建管理员」，避免卡在登录页
+    if((d.errmsg||'').toLowerCase()==='invalid credentials'){
+      try{
+        const r0=await fetch('/api/site/init');
+        const d0=await r0.json();
+        if(d0&&d0.needInit){ showPane(true); setMsg('站点还没有任何账号，请先创建管理员'); }
+      }catch(e){}
+    }
     return;
   }
   await saveLogin(d);
@@ -92,6 +103,9 @@ async function doRegister(){
 document.addEventListener('DOMContentLoaded',()=>{
   $('#btn').onclick=doLogin;
   $('#rbtn').onclick=doRegister;
+  const tr=$('#toReg'), tl=$('#toLogin');
+  if(tr) tr.onclick=()=>showPane(true);
+  if(tl) tl.onclick=()=>showPane(false);
   ['email','pass','code'].forEach(id=>{
     const el=$('#'+id);
     if(el) el.addEventListener('keydown',e=>{ if(e.key==='Enter') doLogin(); });
@@ -111,6 +125,8 @@ document.addEventListener('DOMContentLoaded',()=>{
     }catch(e){}
   }
   document.body.classList.remove('pending');
+  // 支持 /admin/login?register=1 直接进入创建管理员
+  if(/[?&]register=1/.test(location.search)) showPane(true);
   // 自动识别：整个站点还没有任何用户时，直接显示「创建管理员」
   try{
     const r=await fetch('/api/site/init');
@@ -147,6 +163,7 @@ export function renderAdminLoginPage(siteUrl: string): string {
       <input id="code" placeholder="6 位验证码">
     </div>
     <button id="btn">登录</button>
+    <div class="toggle">还没有账号？<a id="toReg">创建管理员账号</a></div>
   </div>
 
   <div id="regWrap" class="hid">
@@ -159,6 +176,7 @@ export function renderAdminLoginPage(siteUrl: string): string {
     <label for="rpass2">确认密码</label>
     <input id="rpass2" type="password" autocomplete="new-password" placeholder="••••••••">
     <button id="rbtn">创建管理员账号</button>
+    <div class="toggle">已有账号？<a id="toLogin">返回登录</a></div>
   </div>
 
   <div class="msg" id="msg"></div>
