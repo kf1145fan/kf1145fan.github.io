@@ -2723,11 +2723,12 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
   <!-- 写作页 -->
   <div id="page-write" class="${pageCls("write")}">
     <div class="wk-card">
-      <div class="toolbar" style="justify-content:space-between;align-items:center">
-        <h3 class="wk-title" style="margin:0;border:none;padding:0" id="editorTitle">发布新文章</h3>
-        <div style="display:flex;gap:6px">
+      <div class="toolbar" style="justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+        <div style="display:flex;align-items:center;gap:8px;min-width:0">
           <button class="wk-btn ghost sm" onclick="go('manage')">← 返回管理文章</button>
+          <h3 class="wk-title" style="margin:0;border:none;padding:0" id="editorTitle">发布新文章</h3>
         </div>
+        <button class="wk-btn" id="saveBtn">发布文章</button>
       </div>
       <label class="wk-label">标题</label>
       <input class="wk-input" id="title" placeholder="文章标题">
@@ -2740,9 +2741,6 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
       <datalist id="tagList"></datalist>
       <label class="wk-label">正文（Markdown，分屏预览）</label>
       <div id="edt"></div>
-      <div class="toolbar" style="justify-content:flex-end;margin-top:12px">
-        <button class="wk-btn" id="saveBtn">发布文章</button>
-      </div>
       <div class="msg" id="msg" style="margin-top:8px"></div>
     </div>
   </div>
