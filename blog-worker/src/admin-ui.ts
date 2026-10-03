@@ -2684,7 +2684,7 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
   </div>
 </nav>
 
-<div class="wk-tabs" ${INITIAL === "write" ? 'style="display:none"' : ""}>
+<div class="wk-tabs">
   <button class="wk-tab ${INITIAL === "manage" ? "active" : ""}" data-tab="manage">管理文章</button>
   <button class="wk-tab ${INITIAL === "comments" ? "active" : ""}" data-tab="comments">评论管理</button>
   <button class="wk-tab ${INITIAL === "files" ? "active" : ""}" data-tab="files">文件管理</button>
