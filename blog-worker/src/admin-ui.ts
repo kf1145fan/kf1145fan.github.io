@@ -2657,14 +2657,18 @@ async function clonePollTick(target){
   if(latest.conclusion==='success') loadFiles();
 }
 async function cloneRepoFromUrl(){
-  if(!confirm('克隆一个外部仓库到当前目录？\\n将自动触发 GitHub 工作流完成（约 10 秒），目标文件夹已存在且非空时会中止。')) return;
+  if(!confirm('克隆一个外部仓库？\\n将自动触发 GitHub 工作流完成（约 10 秒），目标目录已存在且非空时会中止。')) return;
   const repo=prompt('输入要克隆的仓库（owner/repo 或完整 URL），例如 Hexo 主题：');
   if(!repo||!repo.trim()) return;
   const slug=(repo.trim().split('/').filter(Boolean).pop()||'repo').replace(/\.git$/,'');
-  const sub=prompt('克隆到当前目录下的文件夹名：', slug);
+  const sub=prompt('克隆到哪个目录？\\n可填相对当前目录的路径（如 themes/next）；以 / 开头表示从仓库根目录算起。', slug);
   if(sub===null) return;
-  const name=(sub.trim()||slug);
-  const target=(filePath?filePath+'/':'')+name;
+  let name=(sub.trim()||slug);
+  const fromRoot=name.charAt(0)==='/';
+  while(name.charAt(0)==='/') name=name.slice(1);
+  while(name && name.charAt(name.length-1)==='/') name=name.slice(0,-1);
+  if(!name) name=slug;
+  const target=fromRoot?name:((filePath?filePath+'/':'')+name);
   toast('正在触发克隆工作流…');
   const r=await api(API_BASE+'/clone-repo',{method:'POST',body:JSON.stringify({repo_url:repo.trim(),target_dir:target,branch:curBranch()})});
   if(r.status===401){ redirectLogin(); return; }
