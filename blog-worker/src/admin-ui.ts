@@ -173,8 +173,8 @@ a{color:var(--accent);text-decoration:none}
 .ai-conv-t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ai-main{flex:1;display:flex;flex-direction:column;min-width:0}
 .ai-bar{display:flex;align-items:center;gap:6px;flex-wrap:nowrap;padding:10px 14px;border-bottom:1px solid var(--border);flex-shrink:0;min-width:0}
-.ai-scroll{flex:1;overflow:auto;min-height:0;display:flex;justify-content:center}
-.ai-col{max-width:748px;width:100%;padding:18px 16px;display:flex;flex-direction:column;gap:16px}
+.ai-scroll{flex:1;overflow:auto;min-height:0;overflow-anchor:none}
+.ai-col{max-width:748px;width:100%;margin:0 auto;padding:18px 16px;display:flex;flex-direction:column;gap:16px}
 .ai-msg{display:flex;flex-direction:column;gap:4px;min-width:0}
 .ai-msg.user{align-items:flex-end}
 .ai-msg.assistant{align-items:stretch}
@@ -1394,18 +1394,19 @@ function scrollAiBottom(){
   const pin = function(){ try{ box.scrollTop = box.scrollHeight; }catch(e){} };
   pin();
   requestAnimationFrame(function(){ pin(); requestAnimationFrame(pin); });
-  clearTimeout(scrollAiBottom._t1); clearTimeout(scrollAiBottom._t2);
+  clearTimeout(scrollAiBottom._t1); clearTimeout(scrollAiBottom._t2); clearTimeout(scrollAiBottom._t3);
   scrollAiBottom._t1 = setTimeout(pin, 80);
   scrollAiBottom._t2 = setTimeout(pin, 260);
+  scrollAiBottom._t3 = setTimeout(pin, 600);
 }
-// 监听聊天内容高度变化：生成过程中（或用户已在底部附近）内容变高时保持贴底
+// 监听聊天内容高度变化：内容变高/变矮时贴底（生成中无条件贴底，生成后仅在用户已在底部附近时贴底）
 let aiColObserver = null;
 function aiEnsureColObserver(){
   const col = $('#aiCol'), box = $('#aiMessages');
   if(!col || !box || aiColObserver) return;
   try{
     aiColObserver = new ResizeObserver(function(){
-      const nearBottom = (box.scrollHeight - box.scrollTop - box.clientHeight) < 120;
+      const nearBottom = (box.scrollHeight - box.scrollTop - box.clientHeight) < 160;
       if(aiStreaming || nearBottom) box.scrollTop = box.scrollHeight;
     });
     aiColObserver.observe(col);
