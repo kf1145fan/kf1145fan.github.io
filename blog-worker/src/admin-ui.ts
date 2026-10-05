@@ -25,9 +25,16 @@ const STYLE = `
 :root{color-scheme:light dark;--accent:#f97316;--accent-h:#ea580c;--accent-rgb:249,115,22;
 --bg:#f7f7f8;--card:#fff;--fg:#1f2328;--muted:#6b7280;--border:#e3e3e4;--nav:#16181d;
 --nav-fg:#e5e7eb;--nav-active:#ffffff;--hover:#f0f0f1;--input-bg:#fff;--danger:#dc2626}
-@media(prefers-color-scheme:dark){:root{
+/* 深色变量：跟随系统（除非手动选了浅色）/ 手动指定深色时都生效 */
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){
 --bg:#0f1115;--card:#181b20;--fg:#e8e8e8;--muted:#9ca3af;--border:#2b2f36;--nav:#0a0c10;
 --nav-fg:#a3a3a3;--nav-active:#ffffff;--hover:#23272e;--input-bg:#14161a;--danger:#f87171}}
+/* 手动指定主题（设置 → 外观）：优先级高于系统 */
+:root[data-theme="dark"]{
+--bg:#0f1115;--card:#181b20;--fg:#e8e8e8;--muted:#9ca3af;--border:#2b2f36;--nav:#0a0c10;
+--nav-fg:#a3a3a3;--nav-active:#ffffff;--hover:#23272e;--input-bg:#14161a;--danger:#f87171;
+color-scheme:dark}
+:root[data-theme="light"]{color-scheme:light}
 *{box-sizing:border-box}
 body{margin:0;font:13px/1.6 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'PingFang SC','Microsoft YaHei',Helvetica,Arial,sans-serif;background:var(--bg);color:var(--fg)}
 a{color:var(--accent);text-decoration:none}
@@ -50,7 +57,8 @@ a{color:var(--accent);text-decoration:none}
 .build-banner{margin:10px 0 0;padding:8px 12px;font-size:12px;border:1px solid var(--border);border-radius:3px;background:var(--hover)}
 .build-banner.ok{color:#1a7f37;background:#d1f5d3;border-color:transparent}
 .build-banner.err{color:var(--danger);background:rgba(220,38,38,.08);border-color:transparent}
-@media(prefers-color-scheme:dark){.build-banner.ok{color:#4ade80;background:rgba(74,222,128,.12)}}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]) .build-banner.ok{color:#4ade80;background:rgba(74,222,128,.12)}}
+:root[data-theme="dark"] .build-banner.ok{color:#4ade80;background:rgba(74,222,128,.12)}
 /* 横幅右侧「关闭」按钮（仅终态成功/失败提供，运行中不给） */
 .build-x{margin-left:auto;border:0;background:transparent;color:inherit;opacity:.6;font-size:16px;line-height:1;cursor:pointer;padding:2px 7px;border-radius:4px}
 .build-x:hover{opacity:1;background:rgba(128,128,128,.18)}
@@ -58,7 +66,8 @@ a{color:var(--accent);text-decoration:none}
 .build-run-item{display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:3px;background:rgba(251,191,36,.16);color:#8a6d00;font-weight:500}
 .build-dot{width:7px;height:7px;border-radius:50%;background:#f59e0b;flex:0 0 auto;animation:buildPulse 1.2s ease-in-out infinite}
 @keyframes buildPulse{0%,100%{opacity:1}50%{opacity:.2}}
-@media(prefers-color-scheme:dark){.build-run-item{color:#fbbf24;background:rgba(251,191,36,.12)}}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]) .build-run-item{color:#fbbf24;background:rgba(251,191,36,.12)}}
+:root[data-theme="dark"] .build-run-item{color:#fbbf24;background:rgba(251,191,36,.12)}
 /* 内容容器 */
 .wk-wrap{max-width:1080px;margin:14px auto;padding:0 16px}
 /* 卡片（无大圆角） */
@@ -127,7 +136,8 @@ a{color:var(--accent);text-decoration:none}
 .filters{display:flex;gap:6px;flex-wrap:wrap}
 .filters .wk-btn{padding:3px 12px;font-size:12px;border-radius:3px}
 .msg{font-size:12px;min-height:18px}.msg.err{color:var(--danger)}.msg.ok{color:#1a7f37}
-@media(prefers-color-scheme:dark){.msg.ok{color:#4ade80}}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]) .msg.ok{color:#4ade80}}
+:root[data-theme="dark"] .msg.ok{color:#4ade80}
 /* 部署历史 */
 /* 分类/标签历史建议（浏览器原生 datalist，可输入或选择） */
 /* 访问量统计卡片 */
@@ -172,7 +182,10 @@ a{color:var(--accent);text-decoration:none}
 .wk-badge.fail{background:#fde3e3;color:#d1241f}
 .wk-badge.running{background:#fff3cd;color:#8a6d00}
 .wk-badge.wait{background:var(--hover);color:var(--muted)}
-@media(prefers-color-scheme:dark){.wk-badge.success{color:#4ade80;background:rgba(74,222,128,.12)}.wk-badge.fail{color:#f87171;background:rgba(248,113,113,.12)}.wk-badge.running{color:#fbbf24;background:rgba(251,191,36,.12)}}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]) .wk-badge.success{color:#4ade80;background:rgba(74,222,128,.12)}:root:not([data-theme="light"]) .wk-badge.fail{color:#f87171;background:rgba(248,113,113,.12)}:root:not([data-theme="light"]) .wk-badge.running{color:#fbbf24;background:rgba(251,191,36,.12)}}
+:root[data-theme="dark"] .wk-badge.success{color:#4ade80;background:rgba(74,222,128,.12)}
+:root[data-theme="dark"] .wk-badge.fail{color:#f87171;background:rgba(248,113,113,.12)}
+:root[data-theme="dark"] .wk-badge.running{color:#fbbf24;background:rgba(251,191,36,.12)}
 
 /* AI 助手（聊天）：扁平风格，方形直角，贴合后台原有样式 */
 .ai-chat{position:relative;display:flex;gap:0;padding:0;height:calc(100vh - 128px);min-height:420px;overflow:hidden}
@@ -223,11 +236,11 @@ a{color:var(--accent);text-decoration:none}
 /* 任务列表 */
 .ai-body.md li:has(input[type=checkbox]){list-style:none;margin-left:-18px}
 .ai-body.md input[type=checkbox]{width:auto;margin:0 6px 0 0;vertical-align:middle}
-/* 思考过程（可展开/收起） */
-.ai-think{border:1px dashed var(--border);border-radius:2px;padding:6px 10px;margin:0 0 8px;font-size:12.5px;color:var(--muted);background:var(--hover)}
-.ai-think>summary{cursor:pointer;font-size:12px;color:var(--muted);outline:none}
-.ai-think-body{margin-top:6px;white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere;line-height:1.7}
-/* 思考与工具调用过程：生成结束默认收起，可展开查看 */
+/* 生成中的实时状态点（过程收起成一行时使用） */
+.ai-live-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--accent);
+  margin-right:6px;vertical-align:1px;animation:aiPulse 1.1s ease-in-out infinite}
+@keyframes aiPulse{0%,100%{opacity:.3}50%{opacity:1}}
+/* 思考与工具调用过程：默认收起成一行；生成中这一行显示实时状态，结束后显示「已深度思考 · N 次工具调用 · 用时 Xs」，点开看完整过程 */
 .ai-proc{border:1px solid var(--border);border-radius:2px;background:var(--hover);margin:0 0 8px}
 .ai-proc>summary{cursor:pointer;font-size:12px;color:var(--muted);padding:6px 10px;outline:none}
 .ai-proc>summary:hover{color:var(--fg)}
@@ -261,7 +274,8 @@ a{color:var(--accent);text-decoration:none}
 /* 「继续未完成回复」提示条：打开未跑完的历史会话时出现 */
 .ai-continue{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px;padding:7px 10px;font-size:12px;border:1px solid var(--border);border-radius:3px;background:rgba(251,191,36,.14);color:#8a6d00}
 .ai-continue span{flex:1 1 auto}
-@media(prefers-color-scheme:dark){.ai-continue{color:#fbbf24;background:rgba(251,191,36,.12)}}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]) .ai-continue{color:#fbbf24;background:rgba(251,191,36,.12)}}
+:root[data-theme="dark"] .ai-continue{color:#fbbf24;background:rgba(251,191,36,.12)}
 /* 输入框不显示拖拽手柄：随内容自动向上增高（到上限后内部滚动） */
 .ai-input textarea{flex:1;resize:none;min-height:34px;max-height:220px;overflow-y:hidden;border-radius:2px}
 /* 生成中：发送键原地变成灰色「停止」 */
@@ -941,11 +955,15 @@ function aiSetFull(on){
 }
 function aiToggleFull(){
   const el = document.querySelector('.ai-chat'); if(!el) return;
+  const box = $('#aiMessages');
+  const wasStick = aiStick;             // 切换前是否停在底部
+  const keepTop = box ? box.scrollTop : 0;
   const on = !el.classList.contains('ai-full');
   aiSetFull(on);
   try{ localStorage.setItem('aiFull', on ? '1' : '0'); }catch(e){}
-  aiStick = true; // 切换全屏：贴回底部
-  scrollAiBottom();
+  // 全屏切换只改变容器大小，不应改变用户正在看的位置：之前在底部就继续贴底，否则保持原滚动位置
+  if(wasStick){ aiStick = true; scrollAiBottom(); }
+  else if(box){ aiStick = false; try{ box.scrollTop = keepTop; }catch(e){} }
 }
 // 手机端：把聊天卡片高度精确设为「卡片顶部到屏幕底部」，确保输入框紧贴屏幕底边
 function aiFitHeight(){
@@ -1170,6 +1188,21 @@ function aiFoldAttr(key, defOpen){
   const v = aiFoldOpen[key];
   return (v === undefined ? !!defOpen : v) ? ' open' : '';
 }
+// 程序化设置过程块的展开状态（写入 aiFoldOpen，重渲染后保持一致）
+function aiSetProcOpen(key, open){
+  if(!key || aiFoldOpen[key] === open) return;
+  aiFoldOpen[key] = open;
+  const d = document.querySelector('.ai-proc[data-k="' + key + '"]');
+  if(d) d.open = open;
+}
+// 当前正在生成的一轮对应的过程块 key（= 该轮第一条消息的下标）
+function aiLiveTurnKey(){
+  let start = 0;
+  for(let i = aiConvMessages.length - 1; i >= 0; i--){
+    if((aiConvMessages[i] || {}).role === 'user'){ start = i + 1; break; }
+  }
+  return 'proc-' + start;
+}
 function renderAiMessages(){
   const box = $('#aiCol'); if(!box) return;
   // 记录当前滚动位置：用户上滑阅读时，重渲染后要保持在原处（工具调用/流式渲染时尤其容易跳）
@@ -1184,7 +1217,7 @@ function renderAiMessages(){
     // 一轮 AI 回复：assistant 及其后的 tool 结果合并成一个气泡
     const start = i, turn = [];
     while(i < aiConvMessages.length && (aiConvMessages[i] || {}).role !== 'user'){ turn.push(aiConvMessages[i]); i++; }
-    // 只有「正在生成中的最后一轮」默认展开过程，方便实时看进展
+    // 正在生成中的最后一轮：过程收起成一行并显示实时状态
     const live = aiStreaming && i >= aiConvMessages.length;
     html += aiTurnHtml(turn, start, live);
   }
@@ -1349,7 +1382,8 @@ function aiToggleUsage(ev){
 }
 // 一整轮 AI 回复（assistant + 其后的工具结果）渲染成一个气泡，分成两块：
 //   ① 思考与工具调用过程：思考 / 中间输出 / 工具调用与结果，严格按 AI 实际发生的先后顺序，
-//      生成中默认展开便于实时查看，生成结束后默认收起（用户可手动展开）
+//      默认收起成一行：生成中该行显示实时状态（正在调用 xxx… / 思考中…），
+//      生成结束显示摘要「已深度思考 · N 次工具调用 · 用时 Xs」；点开可查看完整步骤
 //   ② 最终回答：本轮最后一个 assistant 消息的正文，始终显示
 // 生成过程中不显示「AI」标签与「复制」按钮，避免运行时的重复标记。
 function aiTurnHtml(turn, startIdx, live){
@@ -1389,12 +1423,41 @@ function aiTurnHtml(turn, startIdx, live){
     }
   }
   const procKey = 'proc-' + startIdx;
-  const procHtml = proc
-    ? '<details class="ai-proc" data-k="' + procKey + '"' + aiFoldAttr(procKey, live || ansIdx < 0) + '>' +
-        '<summary>思考与工具调用过程' + (toolCount ? '（' + toolCount + ' 次工具调用）' : '') +
-        (anyDenied ? '（含被拒绝）' : '') + '</summary>' +
-        '<div class="ai-proc-body">' + proc + '</div></details>'
-    : '';
+  // 方案1：过程块默认收起成一行，点开看完整步骤。
+  //   生成中：默认展开，能看到思考/工具调用实时「说到哪」；AI 一旦开始输出回答就自动收起（见 aiStreamRound）；
+  //   生成结束：收起成一行摘要「已深度思考 · N 次工具调用 · 用时 Xs」。
+  let procHtml = '';
+  if(proc){
+    const body = '<div class="ai-proc-body">' + proc + '</div>';
+    if(live){
+      // 生成中默认展开：能实时看到「说到哪」；等 AI 开始输出回答时自动收起（见 aiStreamRound）
+      const fold = aiFoldAttr(procKey, true);
+      const last = turn[turn.length - 1] || {};
+      let liveText = aiLivePhase;
+      if(!liveText){
+        liveText = '思考中…';
+        if(last.role === 'tool') liveText = '正在处理结果…';
+        else if(last.role === 'assistant' && last.tool_calls && last.tool_calls.length){
+          const pend = last.tool_calls.filter(function(tc){ return !resById[tc.id]; });
+          liveText = pend.length ? ('正在调用 ' + ((pend[0].function && pend[0].function.name) || '工具') + '…') : '正在处理结果…';
+        } else if(last.content) liveText = '正在生成回答…';
+      }
+      procHtml = '<details class="ai-proc" data-k="' + procKey + '"' + fold + '>' +
+        '<summary><span class="ai-live-dot"></span>' + esc(liveText) + '</summary>' + body + '</details>';
+    } else {
+      // 生成结束默认收起成一行摘要（用户点开过则保持其选择）
+      const fold = aiFoldAttr(procKey, false);
+      // 本轮总耗时 = 各轮 streaming 耗时之和
+      let ms = 0;
+      turn.forEach(function(m){ if(m && m.perf && +m.perf.ms > 0) ms += +m.perf.ms; });
+      const hasReasoning = turn.some(function(m){ return !!(m && m.reasoning); });
+      procHtml = '<details class="ai-proc" data-k="' + procKey + '"' + fold + '>' +
+        '<summary>' + (hasReasoning ? '已深度思考' : '已完成') +
+        (toolCount ? ' · ' + toolCount + ' 次工具调用' : '') +
+        (ms > 0 ? ' · 用时 ' + (ms / 1000).toFixed(1) + 's' : '') +
+        (anyDenied ? '（含被拒绝）' : '') + '</summary>' + body + '</details>';
+    }
+  }
   const answerHtml = (ansIdx >= 0)
     ? '<div class="ai-body md ai-answer">' + renderMd(turn[ansIdx].content) + '</div>'
     : '';
@@ -1433,6 +1496,8 @@ function aiNearBottom(box){
 let aiStick = true;
 // 程序化贴底期间置 true：避免把「自己滚动产生的 scroll 事件」误判成用户上滑而中断贴底
 let aiPinGuard = false;
+// 生成中过程行的实时状态文字（流式阶段用；工具执行阶段为空，回退到按消息推断）
+let aiLivePhase = '';
 // 直接把聊天容器拉到底部（带保护标记，滚动事件里会忽略这次自动滚动）
 function aiPinBottom(box){
   if(!box) return;
@@ -1457,8 +1522,8 @@ function scrollAiBottom(){
   scrollAiBottom._t2 = setTimeout(pin, 260);
   scrollAiBottom._t3 = setTimeout(pin, 600);
 }
-// 监听聊天内容高度变化：仅在用户仍处于底部附近时贴底
-let aiColObserver = null, aiScrollBound = false;
+// 监听聊天内容变化：仅在用户仍处于底部附近时贴底
+let aiColObserver = null, aiScrollBound = false, aiDomObserver = null;
 function aiEnsureColObserver(){
   const col = $('#aiCol'), box = $('#aiMessages');
   if(!col || !box) return;
@@ -1469,14 +1534,42 @@ function aiEnsureColObserver(){
       if(aiPinGuard) return; // 忽略自动贴底产生的滚动
       aiStick = aiNearBottom(box);
     });
-  }
-  if(aiColObserver) return;
-  try{
-    aiColObserver = new ResizeObserver(function(){
-      if(aiStick) aiPinBottom(box);
+    // 真实的滚动输入（滚轮/触摸/键盘）立即改变贴底意图，不受贴底保护窗口影响：
+    // 默认「说到哪显示到哪」（贴底），用户一旦上滑就「滑到哪显示到哪」
+    box.addEventListener('wheel', function(e){ if(e.deltaY < 0) aiStick = false; }, { passive:true });
+    let touchY = 0;
+    box.addEventListener('touchstart', function(e){
+      touchY = (e.touches && e.touches[0]) ? e.touches[0].clientY : 0;
+    }, { passive:true });
+    box.addEventListener('touchmove', function(e){
+      const y = (e.touches && e.touches[0]) ? e.touches[0].clientY : 0;
+      if(y > touchY) aiStick = false; // 手指往下滑 = 往回看，停止贴底
+      touchY = y;
+    }, { passive:true });
+    box.addEventListener('keydown', function(e){
+      if(e.key === 'ArrowUp' || e.key === 'PageUp' || e.key === 'Home') aiStick = false;
+      else if(e.key === 'ArrowDown' || e.key === 'PageDown' || e.key === 'End') aiStick = aiNearBottom(box);
     });
-    aiColObserver.observe(col);
-  }catch(e){}
+  }
+  // 尺寸变化（Markdown/代码块/图片撑开高度）时贴底
+  if(!aiColObserver){
+    try{
+      aiColObserver = new ResizeObserver(function(){
+        if(aiStick) aiPinBottom(box);
+      });
+      aiColObserver.observe(col);
+    }catch(e){}
+  }
+  // DOM 变化（新增工具调用卡片、流式追加文字）即时贴底：
+  // 这类变化不一定立刻改变元素尺寸，光靠 ResizeObserver 会「晚一拍」，表现为聊天区上飘一点
+  if(!aiDomObserver){
+    try{
+      aiDomObserver = new MutationObserver(function(){
+        if(aiStick) aiPinBottom(box);
+      });
+      aiDomObserver.observe(col, { childList:true, subtree:true, characterData:true });
+    }catch(e){}
+  }
 }
 function aiStop(){ if(aiAbort){ try{ aiAbort.abort(); }catch(e){} } }
 // 发送键状态：生成中原地变成灰色「停止」按钮（同一个按钮，不额外加按钮）
@@ -1531,14 +1624,12 @@ async function aiAgentLoop(){
       const box = $('#aiCol');
       // 生成中的临时气泡：不显示「AI」标签；首个输出片段到达前先显示「等待模型响应」
       if(box) box.insertAdjacentHTML('beforeend', '<div class="ai-msg assistant">'+
-        (aiThink ? '<details class="ai-think" id="aiCurThink" style="display:none" open><summary>思考中…</summary><div class="ai-think-body"></div></details>' : '')+
         '<div class="ai-body md" id="aiCurBody"></div>'+
         '<div class="ai-wait" id="aiCurWait">等待模型响应…</div></div>');
       scrollAiBottom();
       const bodyEl = box ? box.querySelector('#aiCurBody') : null;
-      const thinkEl = box ? box.querySelector('#aiCurThink') : null;
       const waitEl = box ? box.querySelector('#aiCurWait') : null;
-      const ui = { bodyEl: bodyEl, thinkEl: thinkEl, waitEl: waitEl, acc: '' };
+      const ui = { bodyEl: bodyEl, waitEl: waitEl, acc: '', procKey: aiLiveTurnKey() };
       let res;
       try{
         res = await aiStreamRound(modelName, ui, lastRound);
@@ -1615,7 +1706,7 @@ async function aiAgentLoop(){
       break;
     }
   }finally{
-    aiStreaming = false; aiAbort = null; aiUsagePending = null; aiPerfPending = null;
+    aiStreaming = false; aiAbort = null; aiUsagePending = null; aiPerfPending = null; aiLivePhase = '';
     aiSetSendState(false);
     aiUpdateUsagePop();
     // 生成结束（非中断/异常）后重渲染一次：恢复「AI」标签与「复制」按钮
@@ -1707,18 +1798,25 @@ async function aiStreamRound(modelName, ui, noTools){
       if(j.usage){ usageAcc = j.usage; aiUsagePending = j.usage; aiUpdateUsagePop(); }
       const delta = j.choices && j.choices[0] && j.choices[0].delta;
       if(!delta) continue;
-      // 思考模式：保留模型返回的推理内容（reasoning_content / reasoning）
+      // 思考模式：保留模型返回的推理内容（reasoning_content / reasoning），
+      // 过程中只在状态行显示「思考中…」，完整思考可展开过程查看
       if(aiThink){
         const rc = delta.reasoning_content || delta.reasoning;
         if(rc){
           reasonAcc += rc;
           markFirst();
-          if(ui && ui.thinkEl){ ui.thinkEl.style.display = ''; const b = ui.thinkEl.querySelector('.ai-think-body'); if(b) b.textContent = reasonAcc; }
+          aiLivePhase = '思考中…';
+          if(ui && ui.waitEl && ui.waitEl.style.display !== 'none') ui.waitEl.textContent = '思考中…';
         }
       }
       if(delta.content){
         acc += delta.content;
         markFirst();
+        aiLivePhase = '正在生成回答…';
+        if(ui && ui.waitEl && ui.waitEl.style.display !== 'none') ui.waitEl.style.display = 'none';
+        // AI 开始输出回答：把本轮的过程块自动收起一次（本轮还没调用工具，说明这就是最终回答）；
+        // 只收一次，避免用户之后手动展开时又被收回去
+        if(!Object.keys(toolAcc).length && ui && !ui.procCollapsed){ ui.procCollapsed = true; aiSetProcOpen(ui.procKey, false); }
         if(ui) ui.acc = acc; // 暴露给调用方，停止时可保留部分内容
         // 把已生成的部分作为草稿写入会话并节流落盘：刷新后仍能看到「进行到哪一步」
         aiSetDraft(acc);
@@ -1728,6 +1826,10 @@ async function aiStreamRound(modelName, ui, noTools){
       }
       if(delta.tool_calls && delta.tool_calls.length){
         markFirst();
+        aiLivePhase = '准备调用工具…';
+        if(ui && ui.waitEl && ui.waitEl.style.display !== 'none') ui.waitEl.textContent = '准备调用工具…';
+        // 有工具调用：重新展开过程块，实时看到这次调用了什么
+        aiSetProcOpen(ui && ui.procKey, true);
         for(let ti=0; ti<delta.tool_calls.length; ti++){
           const tc = delta.tool_calls[ti];
           const key = (tc.index === undefined || tc.index === null) ? 0 : tc.index;
@@ -1748,8 +1850,8 @@ async function aiStreamRound(modelName, ui, noTools){
   }).filter(function(t){ return !!t.name; });
   // 收尾：把流式内容按 Markdown 完整渲染一次
   if(ui && ui.bodyEl) ui.bodyEl.innerHTML = renderMd(acc);
-  if(aiThink && ui && ui.thinkEl && !reasonAcc) ui.thinkEl.style.display = 'none';
   if(ui && ui.waitEl) ui.waitEl.style.display = 'none';
+  aiLivePhase = ''; // 流式阶段结束，过程行状态改由消息推断（如「正在调用 xxx…」）
   scrollAiBottom();
   // out：本轮的输出 token 数（取上游 usage），用于折算平均 token 速度
   const outTok = usageAcc ? (+usageAcc.completion_tokens || 0) : 0;
@@ -2227,19 +2329,19 @@ function initEditor(){
     height: 540,
     lang: 'zh_CN',
     mode: 'sv',                       // 分屏预览「复杂模式」（cp.802213.xyz）
-    theme: window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'classic',
+    theme: isDarkMode()?'dark':'classic',
     icon: 'ant',
     outline: true,
     counter: { enable: true, type: 'text' },
     cache: { enable: false },
     preview: {
       delay: 300,
-      hljs: { enable:true, lineNumber:false, style: window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches?'atom-one-dark':'github' },
+      hljs: { enable:true, lineNumber:false, style: isDarkMode()?'atom-one-dark':'github' },
       markdown: { toc:true, mark:true, math:true, codeBlockPreview:true, at:true, gfmAutoLink:true, footnotes:true },
       tex: { inline:true, display:true },
-      theme: { current: window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light' }
+      theme: { current: isDarkMode()?'dark':'light' }
     },
-    previewTheme: window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light',
+    previewTheme: isDarkMode()?'dark':'light',
     codeTheme: 'github',
     toolbarConfig: { pin: true, hide: false },
     toolbar: [
@@ -2907,9 +3009,16 @@ function openFileEditor(path, content){
   // 高亮在后台按需加载，加载完成后自动把已打开的编辑器升级为高亮编辑器
   aceEnsure(function(){ applyAce(); });
 }
-// ACE 字体/主题跟随系统深浅色
+// 当前是否深色（优先看手动指定的 data-theme，其次跟随系统）
+function isDarkMode(){
+  const dt=document.documentElement.getAttribute('data-theme');
+  if(dt==='dark') return true;
+  if(dt==='light') return false;
+  return !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+}
+// ACE 编辑器主题跟随后台深浅色
 function aceThemeName(){
-  return (window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'ace/theme/tomorrow_night' : 'ace/theme/textmate';
+  return isDarkMode() ? 'ace/theme/tomorrow_night' : 'ace/theme/textmate';
 }
 // ACE 就绪时：初始化/切换语言模式、主题与自动补全（未就绪则保持纯文本兜底）
 function applyAce(){
@@ -2969,6 +3078,28 @@ function initAccent(){
   let v='';
   try{ v=localStorage.getItem('admin_accent')||''; }catch(e){}
   applyAccent(v||'#f97316');
+}
+// ---------- 后台深浅色模式（跟随系统 / 浅色 / 深色；仅本机浏览器，localStorage 记住） ----------
+function applyThemeMode(mode){
+  mode = ['auto','light','dark'].indexOf(mode) >= 0 ? mode : 'auto';
+  const root = document.documentElement;
+  if(mode === 'auto') root.removeAttribute('data-theme');
+  else root.setAttribute('data-theme', mode);
+  try{ localStorage.setItem('admin_theme_mode', mode); }catch(e){}
+  const sel = $('#setThemeMode'); if(sel) sel.value = mode;
+  refreshAceTheme(); // 编辑器主题随深浅色切换
+}
+function initThemeMode(){
+  let m='auto';
+  try{ m=localStorage.getItem('admin_theme_mode')||'auto'; }catch(e){}
+  applyThemeMode(m);
+  // 跟随系统时：系统深浅色变化后同步编辑器主题
+  try{
+    const mq=window.matchMedia('(prefers-color-scheme: dark)');
+    const on=function(){ if(!document.documentElement.getAttribute('data-theme')) refreshAceTheme(); };
+    if(mq.addEventListener) mq.addEventListener('change', on);
+    else if(mq.addListener) mq.addListener(on);
+  }catch(e){}
 }
 async function saveFileEdit(){
   const content = fileEditGet();
@@ -3154,6 +3285,7 @@ function restoreDraft(){
 function redirectLogin(){ location.replace('/admin/login'); }
 document.addEventListener('DOMContentLoaded', ()=>{
   initAccent(); // 恢复上次选择的主题色（仅本机浏览器）
+  initThemeMode(); // 恢复上次选择的深浅色模式
   token = getToken();
   if(!token){ redirectLogin(); return; }
   // 记录 URL 中的会话 id（/admin/ai/<id>），供进入 AI 页时自动打开
@@ -3590,9 +3722,17 @@ export function renderAdminPage(siteUrl: string, ghRepo?: string, initial = "man
   <!-- 设置（各分区可展开/收起：SMTP、站点功能、订阅设置、API 说明） -->
   <div id="page-settings" class="${pageCls("settings")}">
     <details class="wk-collapse">
-      <summary>外观 · 主题色</summary>
+      <summary>外观 · 主题</summary>
       <div class="wk-collapse-body">
-        <p class="wk-label" style="margin-top:0">切换后台的主题/强调色（按钮、选中态、图表、编辑器等），选择后立即生效并记住；仅作用于你这台设备的浏览器，不影响访客。</p>
+        <p class="wk-label" style="margin-top:0">深浅色与主题色均可切换，选择后立即生效并记住；仅作用于你这台设备的浏览器，不影响访客。</p>
+        <div class="filters" style="margin:0 0 8px">
+          <span class="wk-label" style="margin:0">深浅色</span>
+          <select class="wk-input" id="setThemeMode" onchange="applyThemeMode(this.value)" style="width:auto;min-width:150px;padding:4px 8px">
+            <option value="auto">跟随系统</option>
+            <option value="light">浅色模式</option>
+            <option value="dark">深色模式</option>
+          </select>
+        </div>
         <div class="filters" style="margin:0 0 4px">
           <span class="wk-label" style="margin:0">主题色</span>
           <select class="wk-input" id="setAccent" onchange="applyAccent(this.value)" style="width:auto;min-width:150px;padding:4px 8px">
