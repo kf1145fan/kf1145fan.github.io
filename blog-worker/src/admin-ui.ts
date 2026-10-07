@@ -236,10 +236,6 @@ a{color:var(--accent);text-decoration:none}
 /* 任务列表 */
 .ai-body.md li:has(input[type=checkbox]){list-style:none;margin-left:-18px}
 .ai-body.md input[type=checkbox]{width:auto;margin:0 6px 0 0;vertical-align:middle}
-/* 生成中的实时状态点（过程收起成一行时使用） */
-.ai-live-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--accent);
-  margin-right:6px;vertical-align:1px;animation:aiPulse 1.1s ease-in-out infinite}
-@keyframes aiPulse{0%,100%{opacity:.3}50%{opacity:1}}
 /* 思考与工具调用过程：默认收起成一行；生成中这一行显示实时状态，结束后显示「已深度思考 · N 次工具调用 · 用时 Xs」，点开看完整过程 */
 .ai-proc{border:1px solid var(--border);border-radius:2px;background:var(--hover);margin:0 0 8px}
 .ai-proc>summary{cursor:pointer;font-size:12px;color:var(--muted);padding:6px 10px;outline:none}
@@ -261,8 +257,7 @@ a{color:var(--accent);text-decoration:none}
 .ai-tool-fold-pre{white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere;line-height:1.6;max-height:240px;overflow:auto;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11.5px}
 .ai-tool-fold-pre.err{color:#d9534f}
 /* 等待模型响应：首个输出片段到达后隐藏 */
-.ai-wait{font-size:12.5px;color:var(--muted);padding:2px 0;animation:aiWaitPulse 1.2s ease-in-out infinite}
-@keyframes aiWaitPulse{0%,100%{opacity:.45}50%{opacity:1}}
+.ai-wait{font-size:12.5px;color:var(--muted);padding:2px 0}
 /* 输入区上方一行的「i」按钮：查看已用 token / 缓存命中 */
 #aiUsageBtn{margin-left:auto;flex:0 0 auto;width:26px;height:26px;padding:0;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;line-height:1}
 .ai-usage-pop{position:fixed;z-index:1200;background:var(--card);border:1px solid var(--border);border-radius:4px;box-shadow:0 6px 24px rgba(0,0,0,.18);padding:10px 12px;min-width:190px;font-size:12px}
@@ -1443,7 +1438,7 @@ function aiTurnHtml(turn, startIdx, live){
         } else if(last.content) liveText = '正在生成回答…';
       }
       procHtml = '<details class="ai-proc" data-k="' + procKey + '"' + fold + '>' +
-        '<summary><span class="ai-live-dot"></span>' + esc(liveText) + '</summary>' + body + '</details>';
+        '<summary>' + esc(liveText) + '</summary>' + body + '</details>';
     } else {
       // 生成结束默认收起成一行摘要（用户点开过则保持其选择）
       const fold = aiFoldAttr(procKey, false);
@@ -1494,8 +1489,21 @@ function aiNearBottom(box){
 }
 // 贴底意图：用户手动上滑阅读时置 false（不再被强制拉到底部），回到底部附近自动恢复 true
 let aiStick = true;
+// 用户向下滚动/松手后，短时间内多次判断是否已回到「底部附近」：AI 还在生成时内容持续增高，
+// 单次判断可能刚好差一点，导致「手动滑到底却不恢复跟随」，这里多帧兜底确保能恢复。
+function aiMaybeStick(){
+  const b = $('#aiMessages'); if(!b) return;
+  if(aiNearBottom(b)) aiStick = true;
+}
+function aiResumeSoon(){
+  setTimeout(aiMaybeStick, 0);
+  setTimeout(aiMaybeStick, 120);
+  setTimeout(aiMaybeStick, 320);
+}
 // 程序化贴底期间置 true：避免把「自己滚动产生的 scroll 事件」误判成用户上滑而中断贴底
 let aiPinGuard = false;
+// 用户正在主动拖动（滚动条/触摸）：此时 scroll 事件一律视为用户行为，不受贴底保护窗口影响
+let aiUserInteracting = false;
 // 生成中过程行的实时状态文字（流式阶段用；工具执行阶段为空，回退到按消息推断）
 let aiLivePhase = '';
 // 直接把聊天容器拉到底部（带保护标记，滚动事件里会忽略这次自动滚动）
@@ -1531,24 +1539,42 @@ function aiEnsureColObserver(){
     aiScrollBound = true;
     // 用户滚动后按「是否在底部附近」更新贴底意图：上滑看历史就不再被拽回底部
     box.addEventListener('scroll', function(){
-      if(aiPinGuard) return; // 忽略自动贴底产生的滚动
+      if(aiPinGuard && !aiUserInteracting) return; // 忽略自动贴底产生的滚动（用户主动拖动时例外）
       aiStick = aiNearBottom(box);
     });
+    // 兜底：容器的 scroll 可能被各种情况吞掉/元素被替换，这里在 document 捕获阶段再判一次——
+    // 只要滚回到「底部附近」就恢复跟随（只负责恢复，不负责停止，停止交给下面的输入事件）
+    document.addEventListener('scroll', function(){
+      if(!aiStick && aiNearBottom(box)) aiStick = true;
+    }, true);
     // 真实的滚动输入（滚轮/触摸/键盘）立即改变贴底意图，不受贴底保护窗口影响：
     // 默认「说到哪显示到哪」（贴底），用户一旦上滑就「滑到哪显示到哪」
-    box.addEventListener('wheel', function(e){ if(e.deltaY < 0) aiStick = false; }, { passive:true });
+    box.addEventListener('wheel', function(e){
+      if(e.deltaY < 0){ aiStick = false; return; }
+      // 往下滚：滚到底部附近就恢复跟随（等这次滚动落定后再判断，内容还在增长时多次兜底）
+      aiResumeSoon();
+    }, { passive:true });
     let touchY = 0;
     box.addEventListener('touchstart', function(e){
       touchY = (e.touches && e.touches[0]) ? e.touches[0].clientY : 0;
     }, { passive:true });
     box.addEventListener('touchmove', function(e){
       const y = (e.touches && e.touches[0]) ? e.touches[0].clientY : 0;
-      if(y > touchY) aiStick = false; // 手指往下滑 = 往回看，停止贴底
+      if(y > touchY){ aiStick = false; } // 手指往下滑 = 往回看，停止贴底
+      else if(aiNearBottom(box)){ aiStick = true; } // 往上滑回底部附近 → 恢复跟随
       touchY = y;
     }, { passive:true });
     box.addEventListener('keydown', function(e){
       if(e.key === 'ArrowUp' || e.key === 'PageUp' || e.key === 'Home') aiStick = false;
       else if(e.key === 'ArrowDown' || e.key === 'PageDown' || e.key === 'End') aiStick = aiNearBottom(box);
+    });
+    // 用户按下（拖动滚动条/触摸）期间，scroll 事件一律按用户行为处理（见上面的 scroll 监听）
+    ['pointerdown','mousedown','touchstart'].forEach(function(ev){
+      box.addEventListener(ev, function(){ aiUserInteracting = true; }, { passive:true });
+    });
+    // 拖动滚动条松手 / 触摸惯性滚动结束：结束交互，并确保停在底部附近时恢复跟随
+    ['pointerup','mouseup','touchend','scrollend'].forEach(function(ev){
+      box.addEventListener(ev, function(){ aiUserInteracting = false; aiResumeSoon(); }, { passive:true });
     });
   }
   // 尺寸变化（Markdown/代码块/图片撑开高度）时贴底
@@ -1813,7 +1839,7 @@ async function aiStreamRound(modelName, ui, noTools){
         acc += delta.content;
         markFirst();
         aiLivePhase = '正在生成回答…';
-        if(ui && ui.waitEl && ui.waitEl.style.display !== 'none') ui.waitEl.style.display = 'none';
+        if(ui && ui.waitEl && ui.waitEl.style.display !== 'none'){ ui.waitEl.style.display = 'none'; scrollAiBottom(); }
         // AI 开始输出回答：把本轮的过程块自动收起一次（本轮还没调用工具，说明这就是最终回答）；
         // 只收一次，避免用户之后手动展开时又被收回去
         if(!Object.keys(toolAcc).length && ui && !ui.procCollapsed){ ui.procCollapsed = true; aiSetProcOpen(ui.procKey, false); }
@@ -3151,7 +3177,7 @@ async function downloadFromUrl(){
   else opBannerEnd('下载失败：'+(r.data&&r.data.error||r.status),false);
 }
 let unzipTimer=null, unzipSeen=false, unzipTries=0;
-const UNZIP_DOT='<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--accent);animation:aiWaitPulse 1s infinite;margin-right:6px"></span>';
+const UNZIP_DOT='<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--accent);margin-right:6px"></span>';
 function renderUnzipStatus(info){
   const el=$('#unzipStatus'); if(!el) return;
   if(!info){ el.classList.add('hidden'); el.innerHTML=''; return; }
