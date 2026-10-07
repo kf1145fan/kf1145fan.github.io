@@ -205,7 +205,7 @@ a{color:var(--accent);text-decoration:none}
 .ai-col{max-width:748px;width:100%;margin:0 auto;padding:18px 16px;display:flex;flex-direction:column;gap:16px}
 .ai-msg{display:flex;flex-direction:column;gap:4px;min-width:0}
 .ai-msg.user{align-items:flex-end}
-.ai-msg.assistant{align-items:stretch}
+.ai-msg.assistant{align-items:stretch;position:relative}
 .ai-who{font-size:11px;color:var(--muted)}
 /* 正文严格限制在气泡内换行：长链接/长串也不会顶出左右两边 */
 .ai-body{white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere;max-width:100%;line-height:1.7;font-size:14px;border-radius:2px}
@@ -256,8 +256,8 @@ a{color:var(--accent);text-decoration:none}
 .ai-tool-fold-sec{margin:0 0 6px}
 .ai-tool-fold-pre{white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere;line-height:1.6;max-height:240px;overflow:auto;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11.5px}
 .ai-tool-fold-pre.err{color:#d9534f}
-/* 等待模型响应：首个输出片段到达后隐藏 */
-.ai-wait{font-size:12.5px;color:var(--muted);padding:2px 0}
+/* 等待模型响应：绝对定位、不占文档流高度——出现/隐藏都不会改变气泡高度，输出底部不会上下跳 */
+.ai-wait{position:absolute;left:0;top:100%;font-size:12.5px;line-height:1.4;color:var(--muted);padding:0;white-space:nowrap;pointer-events:none}
 /* 输入区上方一行的「i」按钮：查看已用 token / 缓存命中 */
 #aiUsageBtn{margin-left:auto;flex:0 0 auto;width:26px;height:26px;padding:0;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;line-height:1}
 .ai-usage-pop{position:fixed;z-index:1200;background:var(--card);border:1px solid var(--border);border-radius:4px;box-shadow:0 6px 24px rgba(0,0,0,.18);padding:10px 12px;min-width:190px;font-size:12px}
