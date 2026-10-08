@@ -1487,6 +1487,11 @@ function aiNearBottom(box){
   const b = box || $('#aiMessages'); if(!b) return true;
   return (b.scrollHeight - b.scrollTop - b.clientHeight) < 120;
 }
+// 是否「正好贴在底部」：只要用户就在最底部，无论中间状态如何都恢复自动跟随（避免状态卡在「不跟随」）
+function aiAtBottom(box){
+  const b = box || $('#aiMessages'); if(!b) return true;
+  return (b.scrollHeight - b.scrollTop - b.clientHeight) < 24;
+}
 // 贴底意图：用户手动上滑阅读时置 false（不再被强制拉到底部），回到底部附近自动恢复 true
 let aiStick = true;
 // 用户向下滚动/松手后，短时间内多次判断是否已回到「底部附近」：AI 还在生成时内容持续增高，
@@ -1550,7 +1555,8 @@ function aiEnsureColObserver(){
     // 真实的滚动输入（滚轮/触摸/键盘）立即改变贴底意图，不受贴底保护窗口影响：
     // 默认「说到哪显示到哪」（贴底），用户一旦上滑就「滑到哪显示到哪」
     box.addEventListener('wheel', function(e){
-      if(e.deltaY < 0){ aiStick = false; return; }
+      // 只有确实还能往上滚时，才把「上滑」当成要往回看（内容还没超出屏幕时不该停止跟随）
+      if(e.deltaY < 0){ if(box.scrollTop > 8) aiStick = false; return; }
       // 往下滚：滚到底部附近就恢复跟随（等这次滚动落定后再判断，内容还在增长时多次兜底）
       aiResumeSoon();
     }, { passive:true });
@@ -1560,7 +1566,7 @@ function aiEnsureColObserver(){
     }, { passive:true });
     box.addEventListener('touchmove', function(e){
       const y = (e.touches && e.touches[0]) ? e.touches[0].clientY : 0;
-      if(y > touchY){ aiStick = false; } // 手指往下滑 = 往回看，停止贴底
+      if(y > touchY){ if(box.scrollTop > 8) aiStick = false; } // 手指往下滑 = 往回看，停止贴底（内容没超出屏幕时不停）
       else if(aiNearBottom(box)){ aiStick = true; } // 往上滑回底部附近 → 恢复跟随
       touchY = y;
     }, { passive:true });
@@ -1581,7 +1587,8 @@ function aiEnsureColObserver(){
   if(!aiColObserver){
     try{
       aiColObserver = new ResizeObserver(function(){
-        if(aiStick) aiPinBottom(box);
+        // 用户正好在底部时，无论状态如何都恢复跟随，避免「明明在最底下却不向下」
+        if(aiStick || aiAtBottom(box)){ aiStick = true; aiPinBottom(box); }
       });
       aiColObserver.observe(col);
     }catch(e){}
@@ -1591,7 +1598,7 @@ function aiEnsureColObserver(){
   if(!aiDomObserver){
     try{
       aiDomObserver = new MutationObserver(function(){
-        if(aiStick) aiPinBottom(box);
+        if(aiStick || aiAtBottom(box)){ aiStick = true; aiPinBottom(box); }
       });
       aiDomObserver.observe(col, { childList:true, subtree:true, characterData:true });
     }catch(e){}
