@@ -1188,7 +1188,7 @@ function aiSetProcOpen(key, open){
   if(!key || aiFoldOpen[key] === open) return;
   aiFoldOpen[key] = open;
   const d = document.querySelector('.ai-proc[data-k="' + key + '"]');
-  if(d) d.open = open;
+  if(d){ d.open = open; scrollAiBottom(); } // 展开/收起过程块会改变高度，跟随状态下立即贴回底部
 }
 // 当前正在生成的一轮对应的过程块 key（= 该轮第一条消息的下标）
 function aiLiveTurnKey(){
@@ -1482,125 +1482,59 @@ function aiBubbleHtml(role, content, idx, m){
     acts +
   '</div>';
 }
-// 用户是否停在聊天底部附近（用于判断「是否继续自动贴底」）
-function aiNearBottom(box){
-  const b = box || $('#aiMessages'); if(!b) return true;
-  return (b.scrollHeight - b.scrollTop - b.clientHeight) < 120;
-}
-// 是否「正好贴在底部」：只要用户就在最底部，无论中间状态如何都恢复自动跟随（避免状态卡在「不跟随」）
-function aiAtBottom(box){
-  const b = box || $('#aiMessages'); if(!b) return true;
-  return (b.scrollHeight - b.scrollTop - b.clientHeight) < 24;
-}
-// 贴底意图：用户手动上滑阅读时置 false（不再被强制拉到底部），回到底部附近自动恢复 true
-let aiStick = true;
-// 用户向下滚动/松手后，短时间内多次判断是否已回到「底部附近」：AI 还在生成时内容持续增高，
-// 单次判断可能刚好差一点，导致「手动滑到底却不恢复跟随」，这里多帧兜底确保能恢复。
-function aiMaybeStick(){
-  const b = $('#aiMessages'); if(!b) return;
-  if(aiNearBottom(b)) aiStick = true;
-}
-function aiResumeSoon(){
-  setTimeout(aiMaybeStick, 0);
-  setTimeout(aiMaybeStick, 120);
-  setTimeout(aiMaybeStick, 320);
-}
-// 程序化贴底期间置 true：避免把「自己滚动产生的 scroll 事件」误判成用户上滑而中断贴底
-let aiPinGuard = false;
-// 用户正在主动拖动（滚动条/触摸）：此时 scroll 事件一律视为用户行为，不受贴底保护窗口影响
-let aiUserInteracting = false;
+// ===== AI 聊天自动滚动（简洁实现）=====
+// 规则：是否跟随 = 用户当前是否停在底部附近。
+// 关键点：只把「用户自己产生的 scroll 事件」当作判断依据，程序化贴底产生的 scroll 事件直接忽略，
+// 这样即使贴底晚了一帧、没完全到底，也不会被误判成「用户上滑」而永久停止跟随。
+const AI_NEAR = 64;                 // 距底部多少 px 内算「在底部」
+let aiStick = true;                 // 是否跟随最新内容
+let aiPinning = false;              // 本次 scroll 事件是否由我们程序化贴底触发
 // 生成中过程行的实时状态文字（流式阶段用；工具执行阶段为空，回退到按消息推断）
 let aiLivePhase = '';
-// 直接把聊天容器拉到底部（带保护标记，滚动事件里会忽略这次自动滚动）
+function aiScroller(){ return $('#aiMessages'); }
+// 距底部的剩余距离
+function aiBottomGap(box){ const b = box || aiScroller(); if(!b) return 0; return b.scrollHeight - b.scrollTop - b.clientHeight; }
+function aiNearBottom(box){ return aiBottomGap(box) <= AI_NEAR; }
+// 直接贴到底部；位置确实变化时才标记 aiPinning（该标记由随后的 scroll 事件消费）
 function aiPinBottom(box){
-  if(!box) return;
-  aiPinGuard = true;
-  try{ box.scrollTop = box.scrollHeight; }catch(e){}
-  clearTimeout(aiPinBottom._g);
-  aiPinBottom._g = setTimeout(function(){ aiPinGuard = false; }, 80);
+  const b = box || aiScroller(); if(!b) return;
+  if(b.scrollTop < b.scrollHeight - b.clientHeight) aiPinning = true;
+  try{ b.scrollTop = b.scrollHeight; }catch(e){}
 }
-// 滚到聊天底部。消息渲染（Markdown/代码块/图片/折叠）可能在设置后继续改变内容高度，
-// 导致停在半路、需要手动下滑；这里用「多帧 + 定时兜底」把这些延迟的高度变化也滚到底。
-// 但用户主动上滑查看上面内容时不再强制贴底（AI 生成过程中同样适用）。
+// 内容/渲染变化后调用：跟随则贴底，并做几次延迟兜底（图片、代码块、字体异步撑高）
 function scrollAiBottom(){
-  const box = $('#aiMessages'); if(!box) return;
   aiEnsureColObserver();
   if(!aiStick) return;
-  // 每次贴底前都重新判断：用户中途上滑后，后续的延时贴底不再生效
-  const pin = function(){ if(!aiStick) return; aiPinBottom(box); };
-  pin();
-  requestAnimationFrame(function(){ pin(); requestAnimationFrame(pin); });
-  clearTimeout(scrollAiBottom._t1); clearTimeout(scrollAiBottom._t2); clearTimeout(scrollAiBottom._t3);
-  scrollAiBottom._t1 = setTimeout(pin, 80);
-  scrollAiBottom._t2 = setTimeout(pin, 260);
-  scrollAiBottom._t3 = setTimeout(pin, 600);
+  aiPinBottom();
+  if(scrollAiBottom._raf) cancelAnimationFrame(scrollAiBottom._raf);
+  scrollAiBottom._raf = requestAnimationFrame(function(){ if(aiStick) aiPinBottom(); });
+  clearTimeout(scrollAiBottom._t);
+  scrollAiBottom._t = setTimeout(function(){ if(aiStick) aiPinBottom(); }, 150);
 }
-// 监听聊天内容变化：仅在用户仍处于底部附近时贴底
-let aiColObserver = null, aiScrollBound = false, aiDomObserver = null;
+// 绑定滚动/尺寸/DOM 监听：用户滚动决定是否跟随；内容变化时即时贴底
+let aiColObserver = null, aiDomObserver = null, aiBoundBox = null, aiObservedCol = null;
 function aiEnsureColObserver(){
-  const col = $('#aiCol'), box = $('#aiMessages');
+  const col = $('#aiCol'), box = aiScroller();
   if(!col || !box) return;
-  if(!aiScrollBound){
-    aiScrollBound = true;
-    // 用户滚动后按「是否在底部附近」更新贴底意图：上滑看历史就不再被拽回底部
+  // 容器可能被重建（切页/全屏），元素变了就重新绑定
+  if(box !== aiBoundBox){
+    aiBoundBox = box;
     box.addEventListener('scroll', function(){
-      if(aiPinGuard && !aiUserInteracting) return; // 忽略自动贴底产生的滚动（用户主动拖动时例外）
-      aiStick = aiNearBottom(box);
-    });
-    // 兜底：容器的 scroll 可能被各种情况吞掉/元素被替换，这里在 document 捕获阶段再判一次——
-    // 只要滚回到「底部附近」就恢复跟随（只负责恢复，不负责停止，停止交给下面的输入事件）
-    document.addEventListener('scroll', function(){
-      if(!aiStick && aiNearBottom(box)) aiStick = true;
-    }, true);
-    // 真实的滚动输入（滚轮/触摸/键盘）立即改变贴底意图，不受贴底保护窗口影响：
-    // 默认「说到哪显示到哪」（贴底），用户一旦上滑就「滑到哪显示到哪」
-    box.addEventListener('wheel', function(e){
-      // 只有确实还能往上滚时，才把「上滑」当成要往回看（内容还没超出屏幕时不该停止跟随）
-      if(e.deltaY < 0){ if(box.scrollTop > 8) aiStick = false; return; }
-      // 往下滚：滚到底部附近就恢复跟随（等这次滚动落定后再判断，内容还在增长时多次兜底）
-      aiResumeSoon();
+      if(aiPinning){ aiPinning = false; aiStick = true; return; } // 忽略自己贴底产生的滚动
+      aiStick = aiNearBottom(box);                                // 用户滚动：按当前位置决定是否跟随
     }, { passive:true });
-    let touchY = 0;
-    box.addEventListener('touchstart', function(e){
-      touchY = (e.touches && e.touches[0]) ? e.touches[0].clientY : 0;
-    }, { passive:true });
-    box.addEventListener('touchmove', function(e){
-      const y = (e.touches && e.touches[0]) ? e.touches[0].clientY : 0;
-      if(y > touchY){ if(box.scrollTop > 8) aiStick = false; } // 手指往下滑 = 往回看，停止贴底（内容没超出屏幕时不停）
-      else if(aiNearBottom(box)){ aiStick = true; } // 往上滑回底部附近 → 恢复跟随
-      touchY = y;
-    }, { passive:true });
-    box.addEventListener('keydown', function(e){
-      if(e.key === 'ArrowUp' || e.key === 'PageUp' || e.key === 'Home') aiStick = false;
-      else if(e.key === 'ArrowDown' || e.key === 'PageDown' || e.key === 'End') aiStick = aiNearBottom(box);
-    });
-    // 用户按下（拖动滚动条/触摸）期间，scroll 事件一律按用户行为处理（见上面的 scroll 监听）
-    ['pointerdown','mousedown','touchstart'].forEach(function(ev){
-      box.addEventListener(ev, function(){ aiUserInteracting = true; }, { passive:true });
-    });
-    // 拖动滚动条松手 / 触摸惯性滚动结束：结束交互，并确保停在底部附近时恢复跟随
-    ['pointerup','mouseup','touchend','scrollend'].forEach(function(ev){
-      box.addEventListener(ev, function(){ aiUserInteracting = false; aiResumeSoon(); }, { passive:true });
-    });
   }
-  // 尺寸变化（Markdown/代码块/图片撑开高度）时贴底
-  if(!aiColObserver){
+  if(col !== aiObservedCol){
+    aiObservedCol = col;
     try{
-      aiColObserver = new ResizeObserver(function(){
-        // 用户正好在底部时，无论状态如何都恢复跟随，避免「明明在最底下却不向下」
-        if(aiStick || aiAtBottom(box)){ aiStick = true; aiPinBottom(box); }
-      });
+      if(aiColObserver) aiColObserver.disconnect();
+      aiColObserver = new ResizeObserver(function(){ if(aiStick) aiPinBottom(); });
       aiColObserver.observe(col);
     }catch(e){}
-  }
-  // DOM 变化（新增工具调用卡片、流式追加文字）即时贴底：
-  // 这类变化不一定立刻改变元素尺寸，光靠 ResizeObserver 会「晚一拍」，表现为聊天区上飘一点
-  if(!aiDomObserver){
     try{
-      aiDomObserver = new MutationObserver(function(){
-        if(aiStick || aiAtBottom(box)){ aiStick = true; aiPinBottom(box); }
-      });
-      aiDomObserver.observe(col, { childList:true, subtree:true, characterData:true });
+      if(aiDomObserver) aiDomObserver.disconnect();
+      aiDomObserver = new MutationObserver(function(){ if(aiStick) aiPinBottom(); });
+      aiDomObserver.observe(col, { childList:true, subtree:true, characterData:true, attributes:true });
     }catch(e){}
   }
 }
