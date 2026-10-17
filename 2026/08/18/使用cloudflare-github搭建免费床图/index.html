@@ -1,0 +1,211 @@
+<!DOCTYPE HTML>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <meta name="google-site-verification" content="" />
+  <meta name="referrer" content="unsafe-url">
+  
+  <title>使用cloudflare+github搭建免费床图</title>
+  <meta name="author" content="Fanchuanhaha">
+  <meta name="description" content="使用cloudflare+github搭建免费床图
+虽然说市面上已经有非常非常多的这样的床图项目了，但是我习惯了彩虹云外链网盘的那样的界面，于是我就用ai吧这个项目移植到了cloudflareworker上面
+
+准备工作一个cloudflare账号一个GitHub账号一个脑子（最重要的）
+fork项">
+  
+  
+  <meta property="og:title" content="使用cloudflare+github搭建免费床图"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <meta property="og:site_name" content="Fanchuanhaha&#39;s Blog"/>
+  <link href="/apple-touch-icon-precomposed.png" sizes="180x180" rel="apple-touch-icon-precomposed">
+  <link rel="alternate" href="/atom.xml" title="Fanchuanhaha&#39;s Blog" type="application/atom+xml">
+  <link rel="stylesheet" href="/css/m.min.css">
+  <link rel="icon" type="image/x-icon" href="/favicon.ico">
+  <script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML" async></script>
+
+<meta name="generator" content="Hexo 7.3.0"></head>
+
+<body>
+  <a id="top"></a>
+  <div id="main">
+    <div class="main-ctnr">
+      <div class="behind">
+  <a href="/" class="back black-color">
+    <svg class="i-close" viewBox="0 0 32 32" width="22" height="22" fill="none" stroke="currentcolor" stroke-linecap="round" stroke-linejoin="round" stroke-width="3">
+        <path d="M2 30 L30 2 M30 30 L2 2"></path>
+    </svg>
+  </a>
+  
+    <div class="description">
+      &nbsp;welcome to my blog
+    </div>
+    
+</div>
+
+
+  <article class="standard post">
+    <div class="title">
+      
+  
+    <h1 class="page-title center">
+        使用cloudflare+github搭建免费床图
+    </h1>
+  
+
+
+    </div>
+    <div class="meta center">
+      <time datetime="2026-08-18T21:02:56.000Z" itemprop="datePublished">
+  <svg class="i-calendar" viewBox="0 0 32 32" width="16" height="16" fill="none" stroke="currentcolor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2">
+    <path d="M2 6 L2 30 30 30 30 6 Z M2 15 L30 15 M7 3 L7 9 M13 3 L13 9 M19 3 L19 9 M25 3 L25 9"></path>
+  </svg>
+  &nbsp;
+  2026-08-18
+</time>
+
+
+    
+    &nbsp;
+    <svg class="i-tag" viewBox="0 0 32 32" width="16" height="16" fill="none" stroke="currentcolor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2">
+      <circle cx="24" cy="8" r="2"></circle>
+      <path d="M2 18 L18 2 30 2 30 14 14 30 Z"></path>
+    </svg>
+    &nbsp;
+    <a href="/categories/Cloudflare/">Cloudflare</a>
+
+
+
+
+    
+    &nbsp;
+    <svg class="i-tag" viewBox="0 0 32 32" width="16" height="16" fill="none" stroke="currentcolor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2">
+      <circle cx="24" cy="8" r="2"></circle>
+      <path d="M2 18 L18 2 30 2 30 14 14 30 Z"></path>
+    </svg>
+    &nbsp;
+    <a href="/tags/项目/">项目</a>·<a href="/tags/cloudflare/">cloudflare</a>
+
+
+    </div>
+    <hr>
+    
+      <ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link" href="#%E4%BD%BF%E7%94%A8cloudflare-github%E6%90%AD%E5%BB%BA%E5%85%8D%E8%B4%B9%E5%BA%8A%E5%9B%BE"><span class="toc-text">使用cloudflare+github搭建免费床图</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%87%86%E5%A4%87%E5%B7%A5%E4%BD%9C"><span class="toc-text">准备工作</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#fork%E9%A1%B9%E7%9B%AE"><span class="toc-text">fork项目</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E9%85%8D%E7%BD%AE%E4%BF%A1%E6%81%AF"><span class="toc-text">配置信息</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%A8%E6%96%B0%E5%AE%89%E8%A3%85"><span class="toc-text">全新安装</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BB%8E%E5%A4%87%E4%BB%BD%E6%81%A2%E5%A4%8D"><span class="toc-text">从备份恢复</span></a></li></ol></li></ol>
+    
+    <div class="picture-container">
+      
+    </div>
+    <h1 id="使用cloudflare-github搭建免费床图"><a href="#使用cloudflare-github搭建免费床图" class="headerlink" title="使用cloudflare+github搭建免费床图"></a>使用cloudflare+github搭建免费床图</h1><blockquote>
+<p>虽然说市面上已经有非常非常多的这样的床图项目了，但是我习惯了彩虹云外链网盘的那样的界面，于是我就用ai吧这个项目移植到了cloudflareworker上面</p>
+</blockquote>
+<h2 id="准备工作"><a href="#准备工作" class="headerlink" title="准备工作"></a>准备工作</h2><p>一个cloudflare账号<br>一个GitHub账号<br>一个脑子（最重要的）</p>
+<h2 id="fork项目"><a href="#fork项目" class="headerlink" title="fork项目"></a>fork项目</h2><p>打开<a target="_blank" rel="noopener" href="https://github.com/fanchuanhaha/cf-pan/">https://github.com/fanchuanhaha/cf-pan/</a></p>
+<p>点击右上方fork按钮 fork到你自己那里</p>
+<h2 id="配置信息"><a href="#配置信息" class="headerlink" title="配置信息"></a>配置信息</h2><p>然后来到cloudflare主页 复制上方地址内你的账户ID<br>例如<br><a target="_blank" rel="noopener" href="https://dash.cloudflare.com/6fd11v1vh19b82ef98gkgk2gd7cca5c2b/home">https://dash.cloudflare.com/6fd11v1vh19b82ef98gkgk2gd7cca5c2b/home</a></p>
+<p>就复制6fd11v1vh19b82ef98gkgk2gd7cca5c2b</p>
+<p>然后返回GitHub，点击刚刚fork了的项目的上面的settings左边找到secrets and variables 点击actions，点击New repository secret<br>Name那里输入<code>CLOUDFLARE_ACCOUNT_ID</code> 下面粘贴你刚刚复制的cf的id 返回cf，点击右上角头像，点击配置文件，点击左侧API令牌，点击创建令牌，点击编辑 Cloudflare Workers旁边的使用模板，权限那里添加更多，选择D1 权限改成编辑，下方两个都改成全部账户全部区域，点击下方创建令牌，复制你的令牌，来到GitHub，再点击New repository secret，name输入<code>CLOUDFLARE_API_TOKEN</code> 下方粘贴你刚刚复制的，点击上方action，点击我同意，点击左侧部署到cloudflareworkers，点击右边run workflow，弹出来的里面再点击runworkflow等待运行完成，来到cf 点击左边计算，点击workers和pages，点击新出来的pan-workers，点击给出的链接(打不开就开魔法）</p>
+<h2 id="全新安装"><a href="#全新安装" class="headerlink" title="全新安装"></a>全新安装</h2><p>然后点击全新安装，输入管理员账号密码，下面选择GitHub的，然后来到访问<a target="_blank" rel="noopener" href="https://github.com/new">https://github.com/new</a>  随便输入一个仓库名称，这个是用来存储你网盘的文件的（好想是最高只支持50mb）当然你可以配置其他存储，下面你想你仓库可以被人看到 Choose visibility就选public不想就选private,然后点击右上角头像，点击settings，在右侧点击Developer settings点击Personal access tokens点击Tokens (classic)点击Generate new token点击Generate new token (classic)<br>输入你GitHub的密码，然后随便输入个名称，Expiration选择No expiration，勾上repo权限，滑到下面点击Generate token，复制得到的密钥，返回网站粘贴到第三个那，然后测试确认并完成。<br>这样就搭建完成了</p>
+<h2 id="从备份恢复"><a href="#从备份恢复" class="headerlink" title="从备份恢复"></a>从备份恢复</h2><p>老 PHP 站点的数据和文件可以直接整体搬过来，不用手动重新传文件。流程是：</p>
+<ul>
+<li><p>把 <a target="_blank" rel="noopener" href="https://raw.githubusercontent.com/fanchuanhaha/cf-pan/refs/heads/main/rec.php">rec.php</a> 上传到原站点更目录<br>访问新网站选择从备份恢复，输入原站点地址和管理员账号密码，获取到原站点信息，然后配置新存储，然后会跳转原站点的rec.php进行恢复</p>
+<p>这个项目只是我已经习惯了彩虹云外链网盘那样的界面，其实GitHub上面已经有非常多这样的项目的了<br>欢迎加入交流：<a target="_blank" rel="noopener" href="https://qm.qq.com/q/DTMDzZNZPa">https://qm.qq.com/q/DTMDzZNZPa</a></p>
+</li>
+</ul>
+
+
+  </article>
+  <script async src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script>
+  <div class="busuanzi center">
+    页阅读量:&nbsp;<span id="busuanzi_value_page_pv"></span>&nbsp;・&nbsp;
+    站访问量:&nbsp;<span id="busuanzi_value_site_pv"></span>&nbsp;・&nbsp;
+    站访客数:&nbsp;<span id="busuanzi_value_site_uv"></span>
+  </div>
+
+
+    
+
+
+
+
+
+    </div>
+  </div>
+  <footer class="page-footer"><div class="clearfix">
+</div>
+<div class="right-foot">
+    <div class="firstrow">
+        <a href="#top" target="_self">
+        <svg class="i-caret-right" viewBox="0 0 32 32" width="24" height="24" fill="none" stroke="currentcolor" stroke-linecap="round" stroke-linejoin="round" stroke-width="3">
+            <path d="M10 30 L26 16 10 2 Z"></path>
+        </svg>
+        </a>
+        © XXX 2016-2020
+    </div>
+    <div class="secondrow">
+        <a target="_blank" rel="noopener" href="https://github.com/gaoryrt/hexo-theme-pln">
+        Theme Pln
+        </a>
+    </div>
+</div>
+<div class="clearfix">
+</div>
+</footer>
+  <script type="text/javascript">
+
+// disqus scripts
+
+
+// dropdown scripts
+function $(s) {
+    return document.querySelector(s)
+  }
+
+  function $$(s) {
+    return document.querySelectorAll(s)
+  }
+  var dropDownElArr = $$('.dropdown')
+  for (var i = 0; i < dropDownElArr.length; i += 1) {
+    dropDownElArr[i].addEventListener('click', function(event) {
+      var content = this.querySelector('.dropdown-content')
+      event.stopPropagation()
+      if (content.className.indexOf('open') < 0) {
+        content.classList.add('open')
+      } else {
+        content.classList.remove('open')
+      }
+    })
+  }
+  document.body.addEventListener('click', function() {
+    var dropDownContentElArr = $$('.dropdown-content')
+    for (var i = 0; i < dropDownContentElArr.length; i += 1) {
+      dropDownContentElArr[i].classList.remove('open')
+    }
+  })
+
+  // smooth scroll
+  $$('a[href^="#"]').forEach(e=>{
+    e.addEventListener("click", function(e) {
+      e.preventDefault();
+      var t = this.getAttribute("href").substr(1);
+      $(`[id='${decodeURIComponent(t)}']`).scrollIntoView({
+        behavior: "smooth"
+      }),
+      t === "top" ? history.replaceState(null, null, " ") : history.pushState(null, null, `#${t}`)
+    })
+  })
+
+// search
+var searchEl = document.querySelector("#local-search-input")
+if (searchEl) searchEl.addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') {
+    var s = e.target.value
+    window.open('//www.google.com/search?q=site:https://blog.902786.xyz%20' + s, '_blank').focus()
+  }
+})
+
+</script>
+
+</body>
+</html>
