@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <author>
+    <name>Fanchuanhaha</name>
+  </author>
+  <generator uri="https://hexo.io/">Hexo</generator>
+  <id>https://blog.902786.xyz/</id>
+  <link href="https://blog.902786.xyz/" rel="alternate"/>
+  <link href="https://blog.902786.xyz/atom.xml" rel="self"/>
+  <rights>All rights reserved 2026, Fanchuanhaha</rights>
+  <subtitle>welcome to my blog</subtitle>
+  <title>Fanchuanhaha's Blog</title>
+  <updated>2026-10-19T15:13:32.039Z</updated>
+  <entry>
+    <author>
+      <name>Fanchuanhaha</name>
+    </author>
+    <content>
+      <![CDATA[<p>请你删掉这篇默认文章<br>进入后台 点击右上角发布新文章</p>]]>
+    </content>
+    <id>https://blog.902786.xyz/2026/10/19/2026-10-19-hello-world/</id>
+    <link href="https://blog.902786.xyz/2026/10/19/2026-10-19-hello-world/"/>
+    <published>2026-10-19T00:00:00.000Z</published>
+    <summary>
+      <![CDATA[<p>请你删掉这篇默认文章<br>进入后台 点击右上角发布新文章</p>]]>
+    </summary>
+    <title>hello world</title>
+    <updated>2026-10-19T15:13:32.039Z</updated>
+  </entry>
+  <entry>
+    <author>
+      <name>Fanchuanhaha</name>
+    </author>
+    <category term="分类1" scheme="https://blog.902786.xyz/categories/%E5%88%86%E7%B1%BB1/"/>
+    <category term="标签1" scheme="https://blog.902786.xyz/tags/%E6%A0%87%E7%AD%BE1/"/>
+    <content>
+      <![CDATA[<p>内容</p>]]>
+    </content>
+    <id>https://blog.902786.xyz/2026/10/19/2026-10-19-%E6%96%87%E7%AB%A01/</id>
+    <link href="https://blog.902786.xyz/2026/10/19/2026-10-19-%E6%96%87%E7%AB%A01/"/>
+    <published>2026-10-19T00:00:00.000Z</published>
+    <summary>
+      <![CDATA[<p>内容</p>]]>
+    </summary>
+    <title>文章1</title>
+    <updated>2026-10-19T15:13:32.039Z</updated>
+  </entry>
+</feed>
