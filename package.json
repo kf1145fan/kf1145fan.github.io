@@ -37,6 +37,6 @@
     "inferno": "^8.2.3",
     "inferno-create-element": "^8.2.3",
     "mongodb": "^7.3.0",
-    "semver": "^7.8.5"
+    "semver": "^7.8.6"
   }
 }
